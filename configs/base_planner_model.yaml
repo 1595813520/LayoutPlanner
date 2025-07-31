@@ -1,0 +1,29 @@
+# @package _global_
+
+# --- Model Hyperparameters ---
+model:
+  name: "LayoutPlanner"
+  d_model: 256          # Transformer的隐藏层维度
+  n_heads: 8            # 多头注意力的头数
+  n_layers: 6           # LFM (Transformer Encoder) 的层数
+  dropout: 0.1
+
+# --- Training Configuration ---
+training:
+  optimizer:
+    name: "AdamW"
+    lr: 1.0e-4
+    weight_decay: 1.0e-2
+  scheduler:
+    name: "CosineAnnealingLR"
+    t_max: 100          # 总的epoch数
+  batch_size: 32
+  num_epochs: 100
+  lambda_style: 0.5     # 风格损失的权重 (关键超参λ)
+  clip_grad_norm: 1.0   # 梯度裁剪
+
+# --- Dataset Paths ---
+dataset:
+  train_data_path: "path/to/preprocessed/train_data.pt"
+  val_data_path: "path/to/preprocessed/val_data.pt"
+  max_elements: 100     # 序列最大长度 (用于padding)
