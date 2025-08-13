@@ -1,15 +1,13 @@
 import argparse
 from venv import logger
-import hydra
 from omegaconf import DictConfig
 import torch
 from torch.utils.data import DataLoader
 from torch.optim import AdamW
 import torch.distributed as dist
 from omegaconf import OmegaConf
-
+from models.layout_planner.embeddings import InputEmbeddings, process_annotation_to_tensors, custom_collate_fn
 from models.layout_planner.planner import LayoutPlanner
-from data_pipeline.dataset import MangaLayoutDataset, collate_fn
 from utils.losses import LayoutCompositeLoss
 
 
@@ -34,7 +32,7 @@ def main():
 
     # 2. 准备数据
     print("Loading data...")
-    train_dataset = MangaLayoutDataset(cfg.dataset.train_data_path)
+    # train_dataset = MangaLayoutDataset(cfg.dataset.train_data_path)
     train_loader = DataLoader(
         train_dataset, 
         batch_size=cfg.training.batch_size, 
@@ -42,6 +40,16 @@ def main():
         collate_fn=collate_fn
     )
     # val_loader同理
+    
+    # --- 数据处理 ---
+    processed_data = process_annotation_to_tensors(annotation)
+    
+    # --- 打包成批次 ---
+    batch = custom_collate_fn([processed_data])
+    
+    embedding_module = InputEmbeddings(d_model=d_model)
+    
+    final_embeddings, padding_mask = embedding_module(batch)
 
     # 3. 初始化优化器和损失函数
     print("Setting up optimizer and loss...")

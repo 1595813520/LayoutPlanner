@@ -167,38 +167,3 @@ def custom_collate_fn(batch_list):
             collated[key] = items
             
     return collated
-
-if __name__ == '__main__':
-    # --- 模拟环境 ---
-    # 模拟一个文本编码器
-    def mock_text_encoder(text):
-        return torch.randn(768)
-
-    ANN_FILE = "/data/DiffSensei-main/checkpoints/mangazero/f_annotations_style.json"
-    # --- 数据处理 ---
-    processed_data = process_annotation_to_tensors(annotation, mock_text_encoder)
-    
-    # --- 打包成批次 ---
-    batch = custom_collate_fn([processed_data])
-    
-    print("--- Batch Content ---")
-    for key, value in batch.items():
-        if isinstance(value, torch.Tensor):
-            print(f"Key: {key}, Shape: {value.shape}")
-        else:
-            print(f"Key: {key}, Type: list")
-    
-    # --- 模型前向传播 ---
-    d_model = 256
-    embedding_module = InputEmbeddings(d_model=d_model)
-    
-    final_embeddings, padding_mask = embedding_module(batch)
-    
-    print("\n--- Model Output ---")
-    print(f"Final Embeddings Shape: {final_embeddings.shape}")
-    print(f"Padding Mask Shape: {padding_mask.shape}")
-    print(f"Padding Mask Content:\n{padding_mask}")
-
-    # 验证输出维度是否正确
-    assert final_embeddings.shape[0] == 2 # Batch size
-    assert final_embeddings.shape[2] == d_model # Embedding dimension
