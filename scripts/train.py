@@ -1,16 +1,32 @@
+import argparse
+from venv import logger
 import hydra
 from omegaconf import DictConfig
 import torch
 from torch.utils.data import DataLoader
 from torch.optim import AdamW
+import torch.distributed as dist
+from omegaconf import OmegaConf
 
-# 导入我们自己写的模块
 from models.layout_planner.planner import LayoutPlanner
 from data_pipeline.dataset import MangaLayoutDataset, collate_fn
-from training.losses import LayoutCompositeLoss
+from utils.losses import LayoutCompositeLoss
 
-@hydra.main(config_path="../configs", config_name="train_config") # 假设有一个总的train_config.yaml
-def main(cfg: DictConfig):
+
+def main():
+    
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config_file", type=str, default='./layout-generator/configs/planner.yaml')
+    known_args, unknown_args = parser.parse_known_args()
+
+    known_args = OmegaConf.create(known_args.__dict__)
+    cfg = OmegaConf.merge(OmegaConf.load(known_args.config_file), known_args)
+    if unknown_args:
+        unknown_args = OmegaConf.from_dotlist(unknown_args)
+        cfg = OmegaConf.merge(cfg, unknown_args)
+    print(OmegaConf.to_yaml(cfg))
+    logger.log("creating model...")
+     
     # 1. 初始化模型
     print("Initializing model...")
     model = LayoutPlanner(cfg.model)

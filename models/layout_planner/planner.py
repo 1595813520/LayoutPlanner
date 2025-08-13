@@ -3,7 +3,7 @@ import torch.nn as nn
 
 # 假设这些模块在相应的文件中已定义
 from .embeddings import InputEmbeddings
-from .lfm import LayoutFusionModule
+from .layout_encoder import LayoutFusionModule
 from .heads import GeometryHead, TypeHead
 
 class LayoutPlanner(nn.Module):
@@ -17,7 +17,7 @@ class LayoutPlanner(nn.Module):
         # 1. 输入嵌入层
         self.embeddings = InputEmbeddings(
             d_model=config.d_model,
-            style_vec_dim=5, # 我们的风格向量是5维
+            style_vec_dim=4, # 风格向量是4维
             max_elements=config.dataset.max_elements
         )
 

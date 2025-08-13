@@ -1,0 +1,38 @@
+layout-generator/
+├── configs/
+│   ├── planner/
+│   │   ├── base_planner_model.yaml   # 模型基本配置 (d_model, n_layers, n_heads)
+│   │   └── style_config.yaml         # 风格参数相关配置 (λ权重, 敏感度δ等)
+│   └── checkpoints/
+│       └── f_annotations_style.json  # 标注文件
+│
+├── models/
+│   ├── layout_planner/
+│   │   ├── planner.py                # 组合模型：整合Embedding, LFM, Heads
+│   │   ├── embeddings.py             # 输入嵌入层 (含Style MLP)
+│   │   ├── layout_encoder.py         # Layout Fusion Module (Transformer Encoder)
+│   │   └── heads.py                  # 并行预测头 (GeometryHead, ShapeInstabilityHead等)
+│   └── diffsensei/
+│       ├── renderer.py               # 关键：Layout-to-Mask渲染器 (使用OpenCV/Pillow)
+│       └── inference_pipeline.py     # 整合Planner和DiffSensei进行推理的完整流程
+│
+├── utils/
+│   ├── losses.py                   # 定义复合损失函数 (L_geom + λ * L_style)
+│   ├── style_calculator.py         # 关键：用PyTorch实现5个风格参数的可微分计算
+│   └── optimizer.py                # 配置优化器和学习率调度器
+│
+├── scripts/
+│   ├── run_training.sh             # 启动训练的shell脚本 (方便设置多卡等参数)
+│   ├── train.py            # 训练Layout Planner的主脚本
+│   ├── run_evaluation.sh           # 评估模型性能的脚本
+│   └── run_inference.sh            # 运行生成一张完整漫画页面的脚本
+│
+├── outputs/
+│   ├── checkpoints/                # 保存训练好的模型权重
+│   └── generated_images/           # 保存生成的漫画页面
+│
+├── pretrained/
+│   └── diffsensei/                 # 存放预训练的DiffSensei模型权重
+│
+├── requirements.txt                # 项目依赖
+└── README.md                       # 项目说明文档

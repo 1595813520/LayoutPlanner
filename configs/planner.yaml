@@ -1,0 +1,44 @@
+
+model:
+  type: .layout_encoder.LayoutTransformerEncoder
+  parameters:
+        used_condition_types: [
+          'obj_class', 'obj_bbox', 'is_valid_obj'
+        ]
+        hidden_dim: 256
+        output_dim: 1024 # model_channels x 4
+        num_layers: 6
+        num_heads: 8
+        use_final_ln: True
+        use_positional_embedding: False
+        resolution_to_attention: [ 32, 16, 8 ]
+        use_key_padding_mask: False
+
+dataset:
+  max_elements: 100     # 序列最大长度 (用于padding)
+  used_condition_types: [ 'obj_class','obj_bbox' ]
+  parameters:
+    filter_mode: 'LostGAN'
+    use_deprecated_stuff2017: True
+    image_size: 256
+    layout_length: 10
+    num_classes_for_layout_object: 185
+    mask_size_for_layout_object: 32
+    loader_num_workers: 4
+    include_relationships: False
+    instance_whitelist: null
+    stuff_whitelist: null
+    include_other: False
+    min_object_size: 0.02
+    min_objects_per_image: 3
+    max_objects_per_image: 8
+    stuff_only: True
+    used_condition_types: [ 'obj_class','obj_bbox' ]
+    return_origin_image: False
+  train:
+      data_path: "DiffSensei-main/checkpoints/mangazero/f_annotations_style.json"
+      image_dir: "DiffSensei-main/checkpoints/mangazero/images"
+      max_num_samples: null
+      specific_image_ids: [ ]
+      shuffle: True
+      batch_size: 4           # 8 GPUs, total_batch_size=4x8=32

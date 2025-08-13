@@ -1,0 +1,10 @@
+panel:
+panel_rect: 矩形Panel
+panel_triangle: 三角形Panel
+panel_polygon: 多边形Panel
+panel_irregular: 不规则Panel
+bubble:
+dialog_bubble: 对话气泡
+thought_bubble: 思考气泡
+effect_bubble: 效果气泡
+sound_bubble: 拟声词气泡
