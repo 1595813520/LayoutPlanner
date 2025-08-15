@@ -1,76 +1,67 @@
+# DiffSensei-main/layout-generator/models/layout_planner/planner.py
 import torch
 import torch.nn as nn
-
-# 假设这些模块在相应的文件中已定义
-from .embeddings import InputEmbeddings
-from .layout_encoder import LayoutFusionModule
-from .heads import GeometryHead, TypeHead
+from .layout_encoder import TokenLayoutEncoder
+from .heads import ParallelPredictionHeads
 
 class LayoutPlanner(nn.Module):
-    """
-    漫画布局规划器主模型。
-    """
-    def __init__(self, config):
+    def __init__(self, encoder_cfg, heads_cfg):
         super().__init__()
-        self.config = config
-
-        # 1. 输入嵌入层
-        self.embeddings = InputEmbeddings(
-            d_model=config.d_model,
-            style_vec_dim=4, # 风格向量是4维
-            max_elements=config.dataset.max_elements
+        self.layout_types = encoder_cfg["layout_types"]
+        self.encoder = TokenLayoutEncoder(**encoder_cfg)
+        self.heads = ParallelPredictionHeads(
+            d_model=encoder_cfg["d_model"],
+            num_panel_classes=heads_cfg.get("num_panel_classes", 4),
+            num_dialog_shapes=heads_cfg.get("num_dialog_shapes", 4),
         )
 
-        # 2. 布局融合模块 (LFM)
-        self.lfm = LayoutFusionModule(
-            d_model=config.d_model,
-            n_heads=config.n_heads,
-            n_layers=config.n_layers,
-            dropout=config.dropout
-        )
-
-        # 3. 并行预测头
-        # 预测panel的8个坐标 (4个点)
-        self.panel_geometry_head = GeometryHead(config.d_model, 8) 
-        # 预测dialog的4个坐标 (bbox)
-        self.dialog_bbox_head = GeometryHead(config.d_model, 4)
-        # 预测形状类型的logits
-        self.shape_type_head = TypeHead(config.d_model, num_classes=10) # 假设有10种形状
+    @torch.no_grad()
+    def _build_parent_remap(self, etypes_1d, eindices_1d):
+        """
+        返回: dict[orig_panel_idx] -> kept_panel_pos (0..num_kept-1)
+        kept_panel_pos 的定义：在当前样本序列中的 panel token 顺序位置（压缩后）
+        """
+        panel_positions = torch.nonzero(etypes_1d == self.layout_types['TYPE_PANEL'], as_tuple=False).flatten()
+        remap = {}
+        k = 0
+        for pos in panel_positions.tolist():
+            orig = int(eindices_1d[pos].item())  # tokenizer里 panel 的 element_indices = 原始 panel 顺序
+            remap[orig] = k
+            k += 1
+        return remap
 
     def forward(self, batch):
         """
-        前向传播逻辑。
+        batch keys:
+          element_types (B,S), element_indices (B,S), parent_panel_indices (B,S), style_vector (B,4)
+        返回 list[ (panel_out, dialog_out, char_out) ]，每个样本一组，方便 loss 做样本内裁剪匹配
         """
-        # 从batch中提取所需输入
-        style_vector = batch['style_vector']
-        element_types = batch['elements_type']
-        caption_embeds = batch['caption_embeds']
-        
-        # 1. 获取输入嵌入
-        # `padding_mask` 用于在LFM中忽略padding部分
-        input_embeds, padding_mask = self.embeddings(style_vector, element_types, caption_embeds)
-        
-        # 2. 通过LFM进行全局信息融合
-        # (B, SeqLen, d_model) -> (B, SeqLen, d_model)
-        fused_features = self.lfm(input_embeds, src_key_padding_mask=padding_mask)
-        
-        # 3. 并行解码，为不同类型的元素使用不同的头
-        # 创建一个字典来存储预测结果
-        predicted_layout = {'panels': {}, 'dialogs': {}, 'elements': {}}
+        etypes = batch["element_types"]       # (B,S)
+        eidxs  = batch["element_indices"]     # (B,S)
+        pidxs  = batch["parent_panel_indices"]# (B,S)
+        style  = batch["style_vector"]        # (B,4)
 
-        # 根据element_types分离出不同元素的特征
-        panel_mask = (element_types == 1) # 假设1代表panel
-        dialog_mask = (element_types == 2) # 假设2代表dialog
+        enc = self.encoder(etypes, eidxs, pidxs, style)
+        seq_feats = enc["seq_feats"]          # (B,S,D)
 
-        # 对panel进行预测
-        panel_features = fused_features[panel_mask]
-        predicted_layout['panels']['coords'] = self.panel_geometry_head(panel_features)
+        outputs = []
+        B, S, D = seq_feats.shape
+        for b in range(B):
+            feats = seq_feats[b]              # (S,D)
+            et_b  = etypes[b]                 # (S,)
+            pi_b  = pidxs[b]                  # (S,)
+            # 构建 orig_panel_idx -> kept_panel_pos
+            remap = self._build_parent_remap(et_b, eidxs[b])
+            # 生成 parent_pos 向量，仅对 dialog/char 有意义
+            parent_pos = torch.full_like(pi_b, fill_value=-1)
+            for i in range(S):
+                if et_b[i].item() in (self.layout_types['TYPE_DIALOG'], self.layout_types['TYPE_CHAR']):
+                    orig = int(pi_b[i].item())
+                    parent_pos[i] = remap.get(orig, -1)  # 若被截断或非法 -> -1
 
-        # 对dialog进行预测
-        dialog_features = fused_features[dialog_mask]
-        predicted_layout['dialogs']['bbox'] = self.dialog_bbox_head(dialog_features)
-
-        # 对所有元素预测形状类型
-        predicted_layout['elements']['shape_logits'] = self.shape_type_head(fused_features)
-        
-        return predicted_layout
+            # Heads 需要的输入是整个序列，但内部会按 mask 取不同元素
+            p_out, d_out, c_out = self.heads(
+                feats, et_b, parent_pos
+            )
+            outputs.append((p_out, d_out, c_out))
+        return outputs

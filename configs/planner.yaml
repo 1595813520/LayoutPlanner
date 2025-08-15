@@ -1,44 +1,57 @@
-
+# DiffSensei-main/layout-generator/configs/planner.yaml
 model:
-  type: .layout_encoder.LayoutTransformerEncoder
+  type: .layout_encoder.TokenLayoutEncoder  
   parameters:
-        used_condition_types: [
-          'obj_class', 'obj_bbox', 'is_valid_obj'
-        ]
-        hidden_dim: 256
-        output_dim: 1024 # model_channels x 4
-        num_layers: 6
-        num_heads: 8
-        use_final_ln: True
-        use_positional_embedding: False
-        resolution_to_attention: [ 32, 16, 8 ]
-        use_key_padding_mask: False
+    max_elements: 90           # 与 collate 的 S_max 对齐
+    d_model: 256
+    num_layers: 6
+    num_heads: 8
+    use_positional_encoding: true
+    use_final_ln: true
+    dropout: 0.1
 
 dataset:
-  max_elements: 100     # 序列最大长度 (用于padding)
-  used_condition_types: [ 'obj_class','obj_bbox' ]
+  max_elements: 90
   parameters:
-    filter_mode: 'LostGAN'
-    use_deprecated_stuff2017: True
-    image_size: 256
-    layout_length: 10
-    num_classes_for_layout_object: 185
-    mask_size_for_layout_object: 32
+    max_panels: 30
+    max_dialogs: 30
+    max_characters: 30
     loader_num_workers: 4
-    include_relationships: False
-    instance_whitelist: null
-    stuff_whitelist: null
-    include_other: False
-    min_object_size: 0.02
-    min_objects_per_image: 3
-    max_objects_per_image: 8
-    stuff_only: True
-    used_condition_types: [ 'obj_class','obj_bbox' ]
-    return_origin_image: False
   train:
-      data_path: "DiffSensei-main/checkpoints/mangazero/f_annotations_style.json"
-      image_dir: "DiffSensei-main/checkpoints/mangazero/images"
-      max_num_samples: null
-      specific_image_ids: [ ]
-      shuffle: True
-      batch_size: 4           # 8 GPUs, total_batch_size=4x8=32
+    data_path: "DiffSensei-main/checkpoints/mangazero/f_annotations_style.json"
+    image_dir: "DiffSensei-main/checkpoints/mangazero/images"
+    max_num_samples: null
+    specific_image_ids: [ ]
+    shuffle: true
+    batch_size: 4
+    
+
+training:
+  epochs: 100
+  lr: 1e-4
+  weight_decay: 0.01
+  clip_grad_norm: 1.0
+  lambda_style: 0.2         # 风格损失权重
+  style_cfg_dropout: 0.1    # CFG 风格丢弃概率 p（训练时每样本独立丢弃风格）
+  save_every: 1
+  save_dir: "./checkpoints"
+
+
+layout_types:
+  TYPE_PAD: 0
+  TYPE_PAGE: 1
+  TYPE_PANEL: 2
+  TYPE_CHAR: 3
+  TYPE_DIALOG: 4
+
+panel_shapes:
+  panel_rect: {id: 0}
+  panel_triangle: {id: 1}
+  panel_trapezoid: {id: 2}
+  panel_irregular_quad: {id: 3}
+
+bubble_shapes:
+  bubble_oval: {id: 0}
+  bubble_flower: {id: 1}
+  bubble_burst: {id: 2}
+  bubble_rect: {id: 3}

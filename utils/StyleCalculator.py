@@ -1,16 +1,14 @@
-
-# ==============================================================================
-# 文件: models/training/style_calculator.py
-# 作用: (在线模块) 作为模型的一部分，在训练时计算预测布局的风格向量 S_pred。
-#       完全使用PyTorch实现，保证端到端可微分。
-# ==============================================================================
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 class StyleCalculator(nn.Module):
     """
-    用PyTorch实现风格参数计算，使其完全可微分。
-    注意：此模块的输入是模型直接预测的、批处理过的张量。
+    直接基于模型预测的 (panel/dialog/char) 张量，计算 4 维风格：
+      1) layout_density: Σ panel_area / page_area
+      2) alignment_score: 1 / (1 + mean(var(cx) + var(cy)))
+      3) shape_instability: mean(RMS of offsets)
+      4) breakout_intensity: mean(dialog_ratio ∪ char_ratio)
     """
     def __init__(self, page_width, page_height, delta_ratio=0.01):
         super().__init__()
@@ -113,4 +111,3 @@ class StyleCalculator(nn.Module):
 
         # 将4个标量堆叠成一个向量
         return torch.stack([layout_density, alignment_score, shape_instability, breakout_intensity], dim=1)
-
