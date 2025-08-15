@@ -20,21 +20,56 @@ class MLP(nn.Module):
 class MultiheadSelfAttn(nn.Module):
     def __init__(self, n_ctx, width, heads, dropout=0.0):
         super().__init__()
-        self.c_qkv = nn.Linear(width, width*3)
+        self.c_qkv = nn.Linear(width, width * 3)
         self.c_proj = nn.Linear(width, width)
         self.heads = heads
         self.dropout = dropout
+
     def forward(self, x, key_padding_mask=None):
+        """
+        x: (B, L, C)
+        key_padding_mask: (B, L) boolean (True for PAD positions) or None
+
+        Returns: (B, L, C)
+        """
         B, L, C = x.shape
-        qkv = self.c_qkv(x).view(B, L, 3, self.heads, C//self.heads)
-        q, k, v = qkv.unbind(dim=2)  # (B,L,H,D)
-        att = (q @ k.transpose(-2, -1)) / math.sqrt(k.size(-1))
+        assert C % self.heads == 0, "d_model must be divisible by num_heads"
+        head_dim = C // self.heads
+
+        # produce qkv and reshape to (B, heads, L, head_dim)
+        qkv = self.c_qkv(x)  # (B, L, 3*C)
+        qkv = qkv.view(B, L, 3, self.heads, head_dim)  # (B, L, 3, heads, head_dim)
+
+        # reorder to (3, B, heads, L, head_dim) then split
+        qkv = qkv.permute(2, 0, 3, 1, 4)  # (3, B, heads, L, head_dim)
+        q, k, v = qkv[0], qkv[1], qkv[2]  # each: (B, heads, L, head_dim)
+
+        # attention: (B, heads, L_q, L_k)
+        att = (q @ k.transpose(-2, -1)) / math.sqrt(head_dim)
+
+        # key_padding_mask: expect shape (B, L_k) (bool or 0/1)
         if key_padding_mask is not None:
-            att = att.masked_fill(key_padding_mask[:,None,None,:], float("-inf"))
-        att = att.softmax(dim=-1)
-        out = (att @ v).transpose(1,2).reshape(B, L, C)
+            # ensure boolean and correct device
+            mask = key_padding_mask.to(torch.bool)
+            if mask.dim() != 2 or mask.shape[0] != B or mask.shape[1] != L:
+                # try to adapt if L differs: if mask shorter/longer, broadcast or slice accordingly
+                # but best is to raise informative error
+                raise RuntimeError(f"key_padding_mask shape {mask.shape} incompatible with x shape (B={B}, L={L})")
+            # mask needs to be (B, 1, 1, L) to broadcast to att (B, heads, L, L)
+            att = att.masked_fill(mask.unsqueeze(1).unsqueeze(2), float("-inf"))
+
+        att = torch.softmax(att, dim=-1)
+        if self.dropout and self.training:
+            att = F.dropout(att, p=self.dropout)
+
+        # att @ v -> (B, heads, L, head_dim)
+        out = (att @ v)
+
+        # rearrange back to (B, L, C)
+        out = out.permute(0, 2, 1, 3).contiguous().view(B, L, C)
         out = self.c_proj(out)
         return out
+
 
 class TransformerBlock(nn.Module):
     def __init__(self, n_ctx, width, heads, dropout=0.0):

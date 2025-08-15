@@ -124,8 +124,8 @@ class ParallelPredictionHeads(nn.Module):
         device = lfm_output.device
         
         panel_mask = (element_types == 2)
-        dialog_mask = (element_types == 3)
-        char_mask = (element_types == 4)
+        char_mask = (element_types == 3)
+        dialog_mask = (element_types == 4)
         
         panel_features = lfm_output[panel_mask]    # (num_panels, d)
         dialog_features = lfm_output[dialog_mask]  # (num_dialogs, d)

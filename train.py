@@ -49,18 +49,11 @@ def main():
     # dataset config
     ds_cfg = cfg["dataset"]
     train_cfg = ds_cfg["train"]
-    model_cfg = cfg["model"]["parameters"]
+    model_params = cfg["model"]["parameters"]
     train_params = cfg.get("training", {})
     layout_types = cfg.get("layout_types", {})
     panel_shapes = cfg.get("panel_shapes", {})
     bubble_shapes = cfg.get("bubble_shapes", {})
-
-    # overrides
-    if args.batch_size is not None:
-        train_cfg["batch_size"] = args.batch_size
-
-    # model config
-    model_cfg = cfg["model"]
     
     seed_everything(42)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -97,7 +90,7 @@ def main():
 
     planner = LayoutPlanner(
         encoder_cfg={
-            **model_cfg, 
+            **model_params, 
             "layout_types": layout_types
         },
         heads_cfg={

@@ -1,4 +1,4 @@
-# DiffSensei-main/layout-generator/utils/collate.py
+# utils/collate.py
 import torch
 from typing import Dict, Any, List
 
@@ -6,8 +6,15 @@ def _norm_xyxy(b, W, H):
     x1, y1, x2, y2 = b
     return [x1/W, y1/H, x2/W, y2/H]
 
+def _xyxy_to_cxcywh(xyxy):
+    x1, y1, x2, y2 = xyxy
+    cx = (x1 + x2) / 2.0
+    cy = (y1 + y2) / 2.0
+    w  = (x2 - x1)
+    h  = (y2 - y1)
+    return [cx, cy, w, h]
+
 def _offsets_from_four_points(four_points, bbox, W, H):
-    # four_points: [[tlx,tly],[trx,try],[brx,bry],[blx,bly]]
     x1, y1, x2, y2 = bbox
     base = [[x1,y1],[x2,y1],[x2,y2],[x1,y2]]
     offs = []
@@ -17,18 +24,22 @@ def _offsets_from_four_points(four_points, bbox, W, H):
     return offs
 
 def pad_to_max_tensor(tensor: torch.Tensor, max_len: int, pad_val: float = 0.0):
-    """Pad 1D / 2D 张量到 max_len"""
+    """Pad 1D / 2D 张量到 max_len；保持维度不变"""
     if tensor.numel() == 0:
-        return torch.full((max_len, tensor.shape[-1] if tensor.ndim>1 else 1), pad_val, dtype=tensor.dtype)
+        if tensor.ndim == 1:
+            return torch.full((max_len,), pad_val, dtype=tensor.dtype, device=tensor.device)
+        else:
+            return torch.full((max_len, tensor.shape[-1]), pad_val, dtype=tensor.dtype, device=tensor.device)
     n = tensor.shape[0]
     if n >= max_len:
         return tensor[:max_len]
-    pad_shape = (max_len - n, tensor.shape[1]) if tensor.ndim==2 else (max_len - n,)
-    pad = torch.full(pad_shape, pad_val, dtype=tensor.dtype, device=tensor.device)
+    if tensor.ndim == 1:
+        pad = torch.full((max_len - n,), pad_val, dtype=tensor.dtype, device=tensor.device)
+    else:
+        pad = torch.full((max_len - n, tensor.shape[1]), pad_val, dtype=tensor.dtype, device=tensor.device)
     return torch.cat([tensor, pad], dim=0)
 
 def single_collate_fn(ann: Dict[str, Any], cfg: Dict[str, int]) -> Dict[str, Any]:
-    """单条 annotation → 单样本张量(dict)"""
     W, H = ann["width"], ann["height"]
     frames = ann.get("frames", [])
     style = ann["style_parameters"]
@@ -39,7 +50,6 @@ def single_collate_fn(ann: Dict[str, Any], cfg: Dict[str, int]) -> Dict[str, Any
     TYPE_CHAR   = cfg["layout_types"]["TYPE_CHAR"]
     TYPE_DIALOG = cfg["layout_types"]["TYPE_DIALOG"]
 
-    # 1) element sequence
     element_types = [TYPE_PAGE]
     element_indices = [0]
     parent_panel_idx = [-1]
@@ -59,8 +69,9 @@ def single_collate_fn(ann: Dict[str, Any], cfg: Dict[str, int]) -> Dict[str, Any
     for k, c in enumerate(chars):
         element_types.append(TYPE_CHAR); element_indices.append(k); parent_panel_idx.append(c["panel_idx"])
 
-    # 2) targets
+    # Panels -> 统一到 (cx, cy, w, h)，全部归一化到 [0,1]
     panel_bboxes, panel_offsets, panel_classes = [], [], []
+    shape_map = {k: v["id"] for k, v in cfg["panel_shapes"].items()}
     for p in panels:
         fr = p["frame"]
         bbox = fr["bbox"]
@@ -68,12 +79,18 @@ def single_collate_fn(ann: Dict[str, Any], cfg: Dict[str, int]) -> Dict[str, Any
         if four is None:
             x1, y1, x2, y2 = bbox
             four = [[x1,y1],[x2,y1],[x2,y2],[x1,y2]]
-        panel_bboxes.append(_norm_xyxy(bbox, W, H))
+
+        # 先 xyxy 归一化，再转 cxcywh
+        xyxy_n = _norm_xyxy(bbox, W, H)
+        cxcywh_n = _xyxy_to_cxcywh(xyxy_n)
+        panel_bboxes.append(cxcywh_n)
+
         panel_offsets.append(_offsets_from_four_points(four, bbox, W, H))
-        shape_map = {k: v["id"] for k, v in cfg["panel_shapes"].items()}
         panel_classes.append(shape_map.get(fr.get("shape_type", "panel_rect"), 0))
 
+    # Dialogs
     dialog_bboxes, dialog_break_labels, dialog_break_ratios, dialog_shapes = [], [], [], []
+    shape_map_dialog = {"bubble_oval":0, "bubble_flower":1, "bubble_burst":2, "bubble_rect":3}
     for d in dialogs:
         dg = d["dialog"]
         xyxy = dg.get("dialog_bbox") or dg.get("bbox") or [0, 0, 1, 1]
@@ -86,9 +103,9 @@ def single_collate_fn(ann: Dict[str, Any], cfg: Dict[str, int]) -> Dict[str, Any
         br = float(dg.get("breakout_ratio", 0.0))
         dialog_break_ratios.append(br)
         dialog_break_labels.append(1 if br > 1e-6 else 0)
-        shape_map = {"bubble_oval":0, "bubble_flower":1, "bubble_burst":2, "bubble_rect":3}
-        dialog_shapes.append(shape_map.get(dg.get("bubble_type", None), 0))
+        dialog_shapes.append(shape_map_dialog.get(dg.get("bubble_type", None), 0))
 
+    # Characters
     char_bboxes, char_break_labels, char_break_ratios = [], [], []
     for c in chars:
         ch = c["char"]
@@ -132,14 +149,12 @@ def single_collate_fn(ann: Dict[str, Any], cfg: Dict[str, int]) -> Dict[str, Any
     }
 
 def collate_fn(batch: List[Dict[str, Any]], cfg: Dict[str, Any]) -> Dict[str, Any]:
-    """批量 collate，pad/stack 成批张量"""
     proc = [single_collate_fn(b, cfg) for b in batch]
 
-    # === 统一 pad 长度 ===
     max_elem_len = max(p["element_types"].shape[0] for p in proc)
-    max_panels = max(p["targets"]["panel_bboxes"].shape[0] for p in proc)
-    max_dialogs = max(p["targets"]["dialog_bboxes"].shape[0] for p in proc)
-    max_chars = max(p["targets"]["character_bboxes"].shape[0] for p in proc)
+    max_panels   = max(p["targets"]["panel_bboxes"].shape[0] for p in proc)
+    max_dialogs  = max(p["targets"]["dialog_bboxes"].shape[0] for p in proc)
+    max_chars    = max(p["targets"]["character_bboxes"].shape[0] for p in proc)
 
     out = {
         "width": torch.tensor([p["width"] for p in proc], dtype=torch.int64),
@@ -147,10 +162,8 @@ def collate_fn(batch: List[Dict[str, Any]], cfg: Dict[str, Any]) -> Dict[str, An
         "style_vector": torch.stack([p["style_vector"] for p in proc], dim=0),
         "element_types": torch.stack([pad_to_max_tensor(p["element_types"], max_elem_len,
                                                         pad_val=cfg["layout_types"]["TYPE_PAD"]) for p in proc]),
-        "element_indices": torch.stack([pad_to_max_tensor(p["element_indices"], max_elem_len,
-                                                          pad_val=0) for p in proc]),
-        "parent_panel_indices": torch.stack([pad_to_max_tensor(p["parent_panel_indices"], max_elem_len,
-                                                               pad_val=-1) for p in proc]),
+        "element_indices": torch.stack([pad_to_max_tensor(p["element_indices"], max_elem_len, pad_val=0) for p in proc]),
+        "parent_panel_indices": torch.stack([pad_to_max_tensor(p["parent_panel_indices"], max_elem_len, pad_val=-1) for p in proc]),
         "targets": {
             "panel_bboxes": torch.stack([pad_to_max_tensor(t["panel_bboxes"], max_panels) for t in [p["targets"] for p in proc]]),
             "panel_offsets": torch.stack([pad_to_max_tensor(t["panel_offsets"], max_panels) for t in [p["targets"] for p in proc]]),
@@ -164,5 +177,4 @@ def collate_fn(batch: List[Dict[str, Any]], cfg: Dict[str, Any]) -> Dict[str, An
             "character_breakout_ratios": torch.stack([pad_to_max_tensor(t["character_breakout_ratios"], max_chars, pad_val=0.0) for t in [p["targets"] for p in proc]]),
         }
     }
-
     return out
