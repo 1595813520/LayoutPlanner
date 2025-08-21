@@ -1,0 +1,39 @@
+[
+  {
+    "image_path": "assassination-classroom/000.jpg",
+    "width": 1804,
+    "height": 1300,
+    "panel_captions": [
+      "A man in a graduation cap and gown stands with a broad smile, his face obscured by a striped mask.",
+      "A group of students in a classroom, some holding cleaning tools, preparing for a day of school. The room is filled with desks and chairs, and the students are dressed in school uniforms.",
+      "A man in a suit and tie is smiling, holding a gun with smoke coming out of it. The background features a splattered pattern and a large, bold letter \"Z\".",
+      "A manga panel featuring a character in a dynamic pose, with a large, dramatic splash of ink in the background. The character is in motion, possibly running or fighting, with a sense of urgency and action.",
+      "A man in a graduation cap and gown stands with a confident smile, his arms crossed. His body is surrounded by a dynamic, swirling motion line, suggesting movement or power.",
+      "A young anime character with sweat on their face, looking determined and slightly exhausted.",
+      "The image is a manga panel featuring a large, detailed depiction of the moon. The moon is shown in a crescent phase, with a dark side and a lit side, and it occupies a significant portion of the panel. The background is a dark, starry sky, and there is a small, cartoon-like figure of a person in the bottom right corner."
+    ],
+    "style_parameters": {
+      "layout_density": 0.8666640988911217,
+      "alignment_score": 0.4278831954835933,
+      "shape_instability": 0.3562083079281801,
+      "breakout_intensity": 0.07690877937393617
+    },
+    "num_panels": 7,
+    "num_characters": 2,
+    "num_dialogs": 14
+  },
+  {
+    "image_path": "assassination-classroom/001.jpg",
+    "width": 1808,
+    "height": 1300,
+    "style_parameters": {
+      "layout_density": 0.8831498965474888,
+      "alignment_score": 0.5508172948238103,
+      "shape_instability": 0.4781267379173155,
+      "breakout_intensity": 0.04457767211717907
+    },
+    "num_panels": 8,
+    "num_characters": 3,
+    "num_dialogs": 14
+  }
+]

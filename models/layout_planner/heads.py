@@ -99,191 +99,167 @@ class DialogShapeHead(nn.Module):
     def forward(self, x):
         return self.mlp(x)  # Shape: (num_dialogs, num_shapes)
 
+    
 class ParallelPredictionHeads(nn.Module):
-    def __init__(self, d_model=512, num_panel_classes=4, num_dialog_shapes=5):
+    def __init__(self, d_model=512, num_panel_classes=4, num_dialog_shapes=4,
+                 layout_types=None, max_panels=30, max_dialogs=30, max_chars=30):
         super().__init__()
         # Panel Prediction Heads
         self.panel_class_head = PanelClassHead(d_model, num_panel_classes)
         self.panel_bbox_head = PanelBBoxHead(d_model)
         self.panel_offsets_head = PanelOffsetsHead(d_model)
-        
+
         # Dialog/Character Prediction Heads
         self.element_bbox_head = ElementBBoxHead(d_model)
         self.breakout_head = BreakoutHead(d_model)
         self.dialog_shape_head = DialogShapeHead(d_model, num_dialog_shapes)
-    
-    def forward(self, lfm_output, element_types, parent_panel_indices):
-        """
-        lfm_output: (seq_len, d_model) - LFM 输出特征序列
-        element_types: (seq_len,) - 每个 token 的类型 (0: PAD, 1: PAGE_CTRL, 2: PANEL, 3: CHARACTER, 4: DIALOG)
-        parent_panel_indices: (seq_len,) - 每个 Dialog/Character 的父 Panel 索引
-        """
-        
-        
-        seq_len, d_model = lfm_output.shape
+        self.layout_types = layout_types or {}
+
+        self.max_panels = max_panels
+        self.max_dialogs = max_dialogs
+        self.max_chars = max_chars
+
+    def forward(self, lfm_output, element_types, element_indices, parent_panel_indices):
+        B, S, D = lfm_output.shape
         device = lfm_output.device
+
+        # mask
+        panel_mask = (element_types == self.layout_types['TYPE_PANEL'])
+        char_mask = (element_types == self.layout_types['TYPE_CHAR'])
+        dialog_mask = (element_types == self.layout_types['TYPE_DIALOG'])
+
+        panel_features = lfm_output[panel_mask]
+        dialog_features = lfm_output[dialog_mask]
+        character_features = lfm_output[char_mask]
+
+        outputs = {}
+
+        # ======== Panel Predictions (pad to max_panels) ========
+        if panel_features.numel() > 0:
+            raw_cls_logits = self.panel_class_head(panel_features)
+            raw_bbox = self.panel_bbox_head(panel_features)
+            raw_offsets = self.panel_offsets_head(panel_features)
+
+            cls_logits_padded = torch.zeros((B, self.max_panels, raw_cls_logits.shape[-1]), device=device)
+            bbox_padded = torch.zeros((B, self.max_panels, raw_bbox.shape[-1]), device=device)
+            offsets_padded = torch.zeros((B, self.max_panels, raw_offsets.shape[-1]), device=device)
+
+            start = 0
+            for b in range(B):
+                num_p = panel_mask[b].sum().item()
+                fill_n = min(num_p, self.max_panels)
+                if fill_n > 0:
+                    cls_logits_padded[b, :fill_n] = raw_cls_logits[start:start+fill_n]
+                    bbox_padded[b, :fill_n] = raw_bbox[start:start+fill_n]
+                    offsets_padded[b, :fill_n] = raw_offsets[start:start+fill_n]
+                start += num_p
+
+            outputs['panel_class_logits'] = cls_logits_padded
+            outputs['panel_bbox'] = bbox_padded
+            outputs['panel_offsets'] = offsets_padded
+
+        # ======== Dialog & Character Predictions (pad to max_dialogs/chars) ========
+        if dialog_features.numel() > 0 or character_features.numel() > 0:
+            batch_idx_panels = torch.nonzero(panel_mask, as_tuple=True)[0]
+            dialog_parent_feats = self._get_parent_features(
+                dialog_mask, parent_panel_indices, panel_mask, element_indices, batch_idx_panels, panel_features
+            )
+            char_parent_feats = self._get_parent_features(
+                char_mask, parent_panel_indices, panel_mask, element_indices, batch_idx_panels, panel_features
+            )
+
+            # --- Dialog ---
+            if dialog_features.numel() > 0:
+                raw_dialog_bbox = self.element_bbox_head(dialog_features)
+                bl, br = self.breakout_head(dialog_features, dialog_parent_feats)
+                raw_shape_logits = self.dialog_shape_head(dialog_features)
+
+                bbox_pad = torch.zeros((B, self.max_dialogs, 4), device=device)
+                bl_pad = torch.zeros((B, self.max_dialogs, 1), device=device)
+                br_pad = torch.zeros((B, self.max_dialogs, 1), device=device)
+                shape_pad = torch.zeros((B, self.max_dialogs, raw_shape_logits.shape[-1]), device=device)
+
+                start = 0
+                for b in range(B):
+                    num_d = dialog_mask[b].sum().item()
+                    fill_n = min(num_d, self.max_dialogs)
+                    if fill_n > 0:
+                        bbox_pad[b, :fill_n] = raw_dialog_bbox[start:start+fill_n]
+                        bl_pad[b, :fill_n] = bl[start:start+fill_n]
+                        br_pad[b, :fill_n] = br[start:start+fill_n]
+                        shape_pad[b, :fill_n] = raw_shape_logits[start:start+fill_n]
+                    start += num_d
+
+                outputs['dialog_bbox'] = bbox_pad
+                outputs['dialog_breakout_logits'] = bl_pad
+                outputs['dialog_breakout_ratio'] = br_pad
+                outputs['dialog_shape_logits'] = shape_pad
+
+            # --- Character ---
+            if character_features.numel() > 0:
+                raw_char_bbox = self.element_bbox_head(character_features)
+                bl, br = self.breakout_head(character_features, char_parent_feats)
+
+                bbox_pad = torch.zeros((B, self.max_chars, 4), device=device)
+                bl_pad = torch.zeros((B, self.max_chars, 1), device=device)
+                br_pad = torch.zeros((B, self.max_chars, 1), device=device)
+
+                start = 0
+                for b in range(B):
+                    num_c = char_mask[b].sum().item()
+                    fill_n = min(num_c, self.max_chars)
+                    if fill_n > 0:
+                        bbox_pad[b, :fill_n] = raw_char_bbox[start:start+fill_n]
+                        bl_pad[b, :fill_n] = bl[start:start+fill_n]
+                        br_pad[b, :fill_n] = br[start:start+fill_n]
+                    start += num_c
+
+                outputs['character_bbox'] = bbox_pad
+                outputs['character_breakout_logits'] = bl_pad
+                outputs['character_breakout_ratio'] = br_pad
+
+        return outputs
+
+    def _get_parent_features(self, child_mask, parent_indices_all, panel_mask, panel_indices_all, batch_idx_panels, panel_features):
+        """ 高效查找父 Panel 特征的辅助函数 """
+        if torch.count_nonzero(child_mask) == 0:
+            return None
         
-        panel_mask = (element_types == 2)
-        char_mask = (element_types == 3)
-        dialog_mask = (element_types == 4)
+        device = panel_features.device
+        B, S = child_mask.shape
         
-        panel_features = lfm_output[panel_mask]    # (num_panels, d)
-        dialog_features = lfm_output[dialog_mask]  # (num_dialogs, d)
-        character_features = lfm_output[char_mask]      # (num_chars, d)
-
-        # 初始化输出
-        panel_outputs = {'class_logits': None, 'bbox': None, 'offsets': None}
-        dialog_outputs = {'bbox': None, 'breakout_logits': None, 'breakout_ratio': None, 'shape_logits': None}
-        character_outputs = {'bbox': None, 'breakout_logits': None, 'breakout_ratio': None}
-    
-        # Panel Predictions
-        if panel_features.shape[0] > 0:
-            panel_outputs['class_logits'] = self.panel_class_head(panel_features)  # (num_panels, num_classes)
-            panel_outputs['bbox'] = self.panel_bbox_head(panel_features)  # (num_panels, 4)
-            panel_outputs['offsets'] = self.panel_offsets_head(panel_features)  # (num_panels, 8)
+        # a. 获取子元素对应的批次索引
+        batch_idx_child = torch.nonzero(child_mask, as_tuple=True)[0]
         
-        if dialog_features.shape[0] > 0:
-            dialog_outputs['bbox'] = self.element_bbox_head(dialog_features)  # (num_dialogs, 4)
-
-            # 获取父 Panel 特征（parent_panel_indices 已在 planner 里重映射）
-            dialog_parent_indices = parent_panel_indices[dialog_mask]         # (num_dialogs,)
-            if panel_features.shape[0] > 0 and dialog_parent_indices.numel() > 0:
-                # 只对有效 parent >=0 的位置做融合；无效位置用 0 特征（不报错）
-                valid_mask = (dialog_parent_indices >= 0)
-                fused_parent = torch.zeros(dialog_features.shape[0], panel_features.shape[1], device=device)
-                if valid_mask.any():
-                    fused_parent[valid_mask] = panel_features[dialog_parent_indices[valid_mask]]
-            else:
-                fused_parent = torch.zeros_like(dialog_features)
-
-            bl, br = self.breakout_head(dialog_features, fused_parent)
-            dialog_outputs['breakout_logits'] = bl  # (num_dialogs, 1)
-            dialog_outputs['breakout_ratio'] = br   # (num_dialogs, 1)
-            dialog_outputs['shape_logits'] = self.dialog_shape_head(dialog_features)  # (num_dialogs, num_shapes)
+        # b. 获取子元素的父 Panel 原始索引
+        parent_indices_child = parent_indices_all[child_mask] # (TotalChildren,)
         
-        # Character Predictions
-        if character_features.shape[0] > 0:
-            character_outputs['bbox'] = self.element_bbox_head(character_features)  # (num_characters, 4)
+        # c. 构建一个映射：(batch_idx, panel_orig_idx) -> panel_compressed_idx
+        # panel_indices_all[panel_mask] -> (TotalPanels,) 得到所有 panel 的原始索引
+        # 这三行代码创建了一个查找表
+        map_keys = torch.stack([batch_idx_panels, panel_indices_all[panel_mask]], dim=1)
+        map_values = torch.arange(panel_features.shape[0], device=device)
+        
+        # d. 准备查询键：(batch_idx_child, parent_indices_child)
+        query_keys = torch.stack([batch_idx_child, parent_indices_child], dim=1)
 
-            char_parent_indices = parent_panel_indices[char_mask]
-            if panel_features.shape[0] > 0 and char_parent_indices.numel() > 0:
-                valid_mask = (char_parent_indices >= 0)
-                fused_parent = torch.zeros(character_features.shape[0], panel_features.shape[1], device=device)
-                if valid_mask.any():
-                    fused_parent[valid_mask] = panel_features[char_parent_indices[valid_mask]]
-            else:
-                fused_parent = torch.zeros_like(character_features)
-
-            bl, br = self.breakout_head(character_features, fused_parent)
-            character_outputs['breakout_logits'] = bl
-            character_outputs['breakout_ratio'] = br
+        # e. 执行查找 (这是一个简化的哈希查找，实际需要更鲁棒的实现)
+        # 我们使用一种更直接的广播和比较方法
+        # 找到每个 child 的 parent 在 panel_features 中的索引
+        # (TotalChildren, 1) == (1, TotalPanels) -> (TotalChildren, TotalPanels)
+        match_matrix = (query_keys[:, 0:1] == map_keys[:, 0:1].T) & \
+                       (query_keys[:, 1:2] == map_keys[:, 1:2].T)
+        
+        # 找到匹配位置
+        found_indices = torch.nonzero(match_matrix, as_tuple=True)[1]
+        
+        # f. 处理未找到父Panel的情况 (例如父Panel被padding截断)
+        # 创建一个默认的零特征张量
+        parent_features = torch.zeros(child_mask.sum(), panel_features.shape[1], device=device)
+        
+        # 仅对找到了父Panel的子元素，用 gather 提取特征
+        valid_child_mask = (parent_indices_child >= 0)
+        if valid_child_mask.any():
+            parent_features[valid_child_mask] = panel_features[found_indices]
             
-            
-        return panel_outputs, dialog_outputs, character_outputs
-
-    
-class PredictionLoss(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.ce = nn.CrossEntropyLoss(ignore_index=-1)
-        self.bce = nn.BCEWithLogitsLoss(reduction='none')
-        self.l1 = nn.L1Loss(reduction='none')
-
-    def _reduced_masked_l1(self, pred: torch.Tensor, target: torch.Tensor):
-        """
-        pred: (K, D), target: (M, D) where K <= M (we assume predictions correspond to first K targets)
-        We take M_first = target[:K] and compute mean L1 over elements.
-        """
-        if pred is None or pred.numel() == 0:
-            return torch.tensor(0.0, device=target.device)
-        K = pred.shape[0]
-        tgt = target[:K]
-        loss = self.l1(pred, tgt).mean()
-        return loss
-
-    def _masked_elementwise_bce(self, logits: torch.Tensor, targets: torch.Tensor):
-        """
-        logits: (K,) or (K,1)
-        targets: (M,)  -> use first K elements
-        """
-        if logits is None or logits.numel() == 0:
-            return torch.tensor(0.0, device=targets.device)
-        K = logits.shape[0]
-        tgt = targets[:K].float()
-        logits_flat = logits.view(-1)
-        loss = self.bce(logits_flat, tgt)
-        return loss.mean()
-
-    def forward(self, predictions, targets):
-        """
-        predictions: (panel_outputs, dialog_outputs, character_outputs) per-sample (not batched)
-        targets: dict containing fixed-size tensors for this sample (from collate)
-                 keys: panel_bboxes (Pmax,4), panel_offsets (Pmax,8), panel_classes (Pmax)
-                       dialog_bboxes (Dmax,4), dialog_breakout_labels (Dmax), dialog_breakout_ratios (Dmax), dialog_shapes (Dmax)
-                       character_bboxes (Cmax,4), character_breakout_labels (Cmax), character_breakout_ratios (Cmax)
-                       panel_mask/dialog_mask/char_mask (Pmax/Dmax/Cmax) (0/1)
-        """
-        panel_out, dialog_out, char_out = predictions
-        total = torch.tensor(0.0, device=targets['panel_bboxes'].device)
-        loss_dict = {}
-
-        # Panels: predictions have size K_panel (num_panels)
-        if panel_out.get('bbox') is not None:
-            # class CE (slice to K)
-            cls_logits = panel_out['class_logits']               # (Kp, C)
-            Kp = cls_logits.shape[0]
-            panel_classes_target = targets['panel_classes'][:Kp]
-            panel_class_loss = self.ce(cls_logits, panel_classes_target)
-            total = total + panel_class_loss
-            loss_dict['panel_class'] = float(panel_class_loss.item())
-
-            # bbox L1
-            bbox_loss = self._reduced_masked_l1(panel_out['bbox'], targets['panel_bboxes'])
-            total = total + bbox_loss
-            loss_dict['panel_bbox'] = float(bbox_loss.item())
-
-            # offsets L1
-            offsets_loss = self._reduced_masked_l1(panel_out['offsets'], targets['panel_offsets'])
-            total = total + offsets_loss
-            loss_dict['panel_offsets'] = float(offsets_loss.item())
-
-        # Dialogs
-        if dialog_out.get('bbox') is not None:
-            dbbox_loss = self._reduced_masked_l1(dialog_out['bbox'], targets['dialog_bboxes'])
-            total = total + dbbox_loss
-            loss_dict['dialog_bbox'] = float(dbbox_loss.item())
-
-            # breakout class (BCE)
-            dbreak_loss = self._masked_elementwise_bce(dialog_out['breakout_logits'].squeeze(-1), targets['dialog_breakout_labels'])
-            total = total + dbreak_loss
-            loss_dict['dialog_breakout_class'] = float(dbreak_loss.item())
-
-            # breakout ratio L1
-            dratio_loss = self._reduced_masked_l1(dialog_out['breakout_ratio'].squeeze(-1), targets['dialog_breakout_ratios'])
-            total = total + dratio_loss
-            loss_dict['dialog_breakout_ratio'] = float(dratio_loss.item())
-
-            # dialog shape CE
-            dshape_logits = dialog_out.get('shape_logits')
-            if dshape_logits is not None:
-                Kd = dshape_logits.shape[0]
-                dshape_target = targets['dialog_shapes'][:Kd]
-                dshape_loss = self.ce(dshape_logits, dshape_target)
-                total = total + dshape_loss
-                loss_dict['dialog_shape'] = float(dshape_loss.item())
-
-        # Characters
-        if char_out.get('bbox') is not None:
-            cbbox_loss = self._reduced_masked_l1(char_out['bbox'], targets['character_bboxes'])
-            total = total + cbbox_loss
-            loss_dict['character_bbox'] = float(cbbox_loss.item())
-
-            cbreak_loss = self._masked_elementwise_bce(char_out['breakout_logits'].squeeze(-1), targets['character_breakout_labels'])
-            total = total + cbreak_loss
-            loss_dict['character_breakout_class'] = float(cbreak_loss.item())
-
-            cratio_loss = self._reduced_masked_l1(char_out['breakout_ratio'].squeeze(-1), targets['character_breakout_ratios'])
-            total = total + cratio_loss
-            loss_dict['character_breakout_ratio'] = float(cratio_loss.item())
-
-        return total, loss_dict
+        return parent_features

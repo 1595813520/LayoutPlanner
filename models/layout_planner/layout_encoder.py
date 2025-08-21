@@ -100,6 +100,7 @@ class TokenLayoutEncoder(nn.Module):
                  num_layers: int,
                  num_heads: int,
                  layout_types,
+                 caption_embed_dim: int = 768,
                  use_positional_encoding: bool = True,
                  use_final_ln: bool = True,
                  dropout: float = 0.0):
@@ -121,6 +122,8 @@ class TokenLayoutEncoder(nn.Module):
             nn.ReLU(),
             nn.Linear(d_model//2, d_model)
         )
+        
+        self.caption_proj = nn.Linear(caption_embed_dim, d_model)
 
         if use_positional_encoding:
             self.pos_embed = nn.Parameter(torch.zeros(1, max_elements, d_model))
@@ -139,7 +142,7 @@ class TokenLayoutEncoder(nn.Module):
         p = torch.where(p < 0, torch.zeros_like(p), p + 2)
         return torch.clamp(p, 0, max_elements+1)
 
-    def forward(self, element_types, element_indices, parent_panel_indices, style_vector):
+    def forward(self, element_types, element_indices, parent_panel_indices, style_vector, panel_caption_embeddings=None):
         """
         element_types: (B,S) long
         element_indices: (B,S) long
@@ -149,24 +152,48 @@ class TokenLayoutEncoder(nn.Module):
         B, S = element_types.shape
         assert S <= self.max_elements, f"S={S} > max_elements={self.max_elements}"
 
-        # base embed
+        # 1. Base embed (type + index + parent)
         x = self.type_embed(element_types) + self.index_embed(torch.clamp(element_indices, 0, self.max_elements-1))
         # parent embed
         p_bucket = self._bucket_parent(parent_panel_indices, self.max_elements)  # (B,S)
         x = x + self.parent_bucket(p_bucket)
 
-        # inject style ONLY to PAGE tokens
+        # 2 inject style ONLY to PAGE tokens
         is_page = (element_types == self.layout_types['TYPE_PAGE']).unsqueeze(-1)  # (B,S,1)
         style_e = self.style_mlp(style_vector).unsqueeze(1)   # (B,1,D)
         x = x + style_e * is_page
+        
+        # 3 Inject caption embeddings ONLY to PANEL tokens ---
+        if panel_caption_embeddings is not None:
+            is_panel = (element_types == self.layout_types['TYPE_PANEL']) # (B, S)
+            
+            # Project caption embeddings to d_model
+            caption_e = self.caption_proj(panel_caption_embeddings) # (B, NumPanels, D)
+            
+            # Create a zero tensor to "scatter" the caption embeddings into
+            caption_injection = torch.zeros_like(x)
+            
+            # Get the indices of the panels within their own group (0, 1, 2...)
+            panel_indices = element_indices[is_panel] 
+            
+            # Create batch indices to correctly select from the caption tensor
+            batch_indices = torch.arange(B, device=x.device).unsqueeze(1).expand(-1, S)[is_panel]
+            
+            # Select the correct caption embedding for each panel token
+            selected_captions = caption_e[batch_indices, panel_indices]
+            
+            # Place the selected caption embeddings into the correct sequence positions
+            caption_injection[is_panel] = selected_captions
+            
+            # Add the caption embeddings to the base embeddings
+            x = x + caption_injection
 
-        # padding mask
-        key_padding_mask = (element_types == self.layout_types['TYPE_PAD'])  # (B,S)
-
-        # pos
+        # 4. Add positional encoding
         if self.use_positional_encoding:
             x = x + self.pos_embed[:, :S, :]
-
+            
+        # 5. Create padding mask and pass through Transformer blocks
+        key_padding_mask = (element_types == self.layout_types['TYPE_PAD'])
         for blk in self.blocks:
             x = blk(x, key_padding_mask)
 

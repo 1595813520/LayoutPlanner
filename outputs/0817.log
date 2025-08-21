@@ -1,0 +1,403 @@
+nohup: ignoring input
+[Epoch 1 | iter 200/783] avg_loss=3.3972 geom=0.6242  pred=3.2737 style=0.1367
+[Epoch 1 | iter 400/783] avg_loss=3.2622 geom=0.6365  pred=3.6721 style=0.1093
+[Epoch 1 | iter 600/783] avg_loss=3.2200 geom=0.5848  pred=3.0786 style=0.1271
+Epoch 1 done in 133.8s | loss=3.1991
+[Epoch 2 | iter 200/783] avg_loss=3.1113 geom=0.5144  pred=2.8250 style=0.1217
+[Epoch 2 | iter 400/783] avg_loss=3.0939 geom=0.6916  pred=3.0549 style=0.1386
+[Epoch 2 | iter 600/783] avg_loss=3.0849 geom=0.6590  pred=3.4072 style=0.2119
+Epoch 2 done in 132.5s | loss=3.0832
+[Epoch 3 | iter 200/783] avg_loss=2.9966 geom=0.6078  pred=2.6959 style=0.1274
+[Epoch 3 | iter 400/783] avg_loss=3.0167 geom=0.5186  pred=3.5739 style=0.2187
+[Epoch 3 | iter 600/783] avg_loss=3.0147 geom=0.3374  pred=2.6960 style=0.1047
+Epoch 3 done in 129.5s | loss=3.0105
+[Epoch 4 | iter 200/783] avg_loss=2.9767 geom=0.5073  pred=2.4219 style=0.0540
+[Epoch 4 | iter 400/783] avg_loss=2.9815 geom=0.5874  pred=3.0979 style=0.1448
+[Epoch 4 | iter 600/783] avg_loss=2.9791 geom=0.5612  pred=3.1884 style=0.1661
+Epoch 4 done in 130.5s | loss=2.9771
+[Epoch 5 | iter 200/783] avg_loss=2.9198 geom=0.4851  pred=2.6270 style=0.0957
+[Epoch 5 | iter 400/783] avg_loss=2.9409 geom=0.7555  pred=2.6307 style=0.0956
+[Epoch 5 | iter 600/783] avg_loss=2.9445 geom=0.4697  pred=2.8203 style=0.1485
+Epoch 5 done in 129.3s | loss=2.9520
+[Epoch 6 | iter 200/783] avg_loss=2.9371 geom=0.2314  pred=2.9169 style=0.1381
+[Epoch 6 | iter 400/783] avg_loss=2.9200 geom=0.2741  pred=2.9448 style=0.2209
+[Epoch 6 | iter 600/783] avg_loss=2.9251 geom=0.5445  pred=2.6916 style=0.0854
+Epoch 6 done in 129.4s | loss=2.9213
+[Epoch 7 | iter 200/783] avg_loss=2.9101 geom=0.1788  pred=2.9636 style=0.1341
+[Epoch 7 | iter 400/783] avg_loss=2.8944 geom=0.3154  pred=2.6860 style=0.1348
+[Epoch 7 | iter 600/783] avg_loss=2.8892 geom=0.2098  pred=2.8409 style=0.1994
+Epoch 7 done in 130.2s | loss=2.8872
+[Epoch 8 | iter 200/783] avg_loss=2.8834 geom=0.1831  pred=2.6927 style=0.0918
+[Epoch 8 | iter 400/783] avg_loss=2.8628 geom=0.4300  pred=2.6684 style=0.1118
+[Epoch 8 | iter 600/783] avg_loss=2.8645 geom=0.2994  pred=3.1236 style=0.1363
+Epoch 8 done in 129.0s | loss=2.8653
+[Epoch 9 | iter 200/783] avg_loss=2.8215 geom=0.5024  pred=2.3739 style=0.0748
+[Epoch 9 | iter 400/783] avg_loss=2.8349 geom=0.1061  pred=2.3738 style=0.0964
+[Epoch 9 | iter 600/783] avg_loss=2.8543 geom=0.5074  pred=3.0267 style=0.2013
+Epoch 9 done in 128.9s | loss=2.8490
+[Epoch 10 | iter 200/783] avg_loss=2.8281 geom=0.2990  pred=2.8200 style=0.1585
+[Epoch 10 | iter 400/783] avg_loss=2.8061 geom=0.1531  pred=3.0153 style=0.1380
+[Epoch 10 | iter 600/783] avg_loss=2.8277 geom=0.0433  pred=3.2632 style=0.1484
+Epoch 10 done in 130.1s | loss=2.8381
+[Epoch 11 | iter 200/783] avg_loss=2.7875 geom=0.2009  pred=2.8147 style=0.0772
+[Epoch 11 | iter 400/783] avg_loss=2.7971 geom=0.3412  pred=2.7104 style=0.1201
+[Epoch 11 | iter 600/783] avg_loss=2.8139 geom=0.0873  pred=2.8186 style=0.0736
+Epoch 11 done in 129.8s | loss=2.8193
+[Epoch 12 | iter 200/783] avg_loss=2.7848 geom=0.1703  pred=2.8355 style=0.1387
+[Epoch 12 | iter 400/783] avg_loss=2.8024 geom=0.3091  pred=2.3831 style=0.1185
+[Epoch 12 | iter 600/783] avg_loss=2.7992 geom=0.0784  pred=2.4927 style=0.1054
+Epoch 12 done in 129.4s | loss=2.7997
+[Epoch 13 | iter 200/783] avg_loss=2.7762 geom=0.0658  pred=2.9106 style=0.1038
+[Epoch 13 | iter 400/783] avg_loss=2.7847 geom=0.1531  pred=2.5008 style=0.1216
+[Epoch 13 | iter 600/783] avg_loss=2.7757 geom=0.0939  pred=3.0286 style=0.2639
+Epoch 13 done in 130.1s | loss=2.7740
+[Epoch 14 | iter 200/783] avg_loss=2.7516 geom=0.0712  pred=2.8417 style=0.1011
+[Epoch 14 | iter 400/783] avg_loss=2.7434 geom=0.2229  pred=2.2545 style=0.1214
+[Epoch 14 | iter 600/783] avg_loss=2.7433 geom=0.1565  pred=2.9085 style=0.1928
+Epoch 14 done in 128.3s | loss=2.7458
+[Epoch 15 | iter 200/783] avg_loss=2.7116 geom=0.1239  pred=2.9242 style=0.0954
+[Epoch 15 | iter 400/783] avg_loss=2.7173 geom=0.0092  pred=2.5552 style=0.1242
+[Epoch 15 | iter 600/783] avg_loss=2.7185 geom=0.1972  pred=2.6588 style=0.1538
+Epoch 15 done in 128.8s | loss=2.7152
+[Epoch 16 | iter 200/783] avg_loss=2.6698 geom=0.2109  pred=2.3862 style=0.1044
+[Epoch 16 | iter 400/783] avg_loss=2.6765 geom=0.0240  pred=2.4755 style=0.0734
+[Epoch 16 | iter 600/783] avg_loss=2.6787 geom=0.2015  pred=2.4332 style=0.1391
+Epoch 16 done in 129.1s | loss=2.6871
+[Epoch 17 | iter 200/783] avg_loss=2.6089 geom=0.2639  pred=2.2675 style=0.1546
+[Epoch 17 | iter 400/783] avg_loss=2.6261 geom=0.1067  pred=2.4812 style=0.1539
+[Epoch 17 | iter 600/783] avg_loss=2.6359 geom=0.2836  pred=3.0488 style=0.1155
+Epoch 17 done in 129.7s | loss=2.6511
+[Epoch 18 | iter 200/783] avg_loss=2.5904 geom=0.0966  pred=2.5133 style=0.1498
+[Epoch 18 | iter 400/783] avg_loss=2.6094 geom=0.1359  pred=2.8137 style=0.0898
+[Epoch 18 | iter 600/783] avg_loss=2.6167 geom=0.3275  pred=2.6665 style=0.0781
+Epoch 18 done in 128.8s | loss=2.6092
+[Epoch 19 | iter 200/783] avg_loss=2.5436 geom=0.2315  pred=2.1544 style=0.1079
+[Epoch 19 | iter 400/783] avg_loss=2.5642 geom=0.1929  pred=2.5343 style=0.1896
+[Epoch 19 | iter 600/783] avg_loss=2.5594 geom=0.1042  pred=2.7050 style=0.0946
+Epoch 19 done in 129.7s | loss=2.5655
+[Epoch 20 | iter 200/783] avg_loss=2.4833 geom=0.2475  pred=2.2149 style=0.1296
+[Epoch 20 | iter 400/783] avg_loss=2.5008 geom=0.1472  pred=2.5688 style=0.2179
+[Epoch 20 | iter 600/783] avg_loss=2.5139 geom=0.0894  pred=2.7733 style=0.1752
+Epoch 20 done in 129.2s | loss=2.5128
+[Epoch 21 | iter 200/783] avg_loss=2.4017 geom=0.2827  pred=2.3406 style=0.1319
+[Epoch 21 | iter 400/783] avg_loss=2.4225 geom=0.1734  pred=2.1085 style=0.1473
+[Epoch 21 | iter 600/783] avg_loss=2.4372 geom=0.1430  pred=2.7630 style=0.1879
+Epoch 21 done in 129.1s | loss=2.4491
+[Epoch 22 | iter 200/783] avg_loss=2.3676 geom=0.1672  pred=2.7110 style=0.1905
+[Epoch 22 | iter 400/783] avg_loss=2.3801 geom=0.1526  pred=2.2669 style=0.1451
+[Epoch 22 | iter 600/783] avg_loss=2.3894 geom=0.3234  pred=2.2407 style=0.0802
+Epoch 22 done in 129.5s | loss=2.3926
+[Epoch 23 | iter 200/783] avg_loss=2.2807 geom=0.2472  pred=2.9874 style=0.1315
+[Epoch 23 | iter 400/783] avg_loss=2.3113 geom=0.2278  pred=2.3266 style=0.1839
+[Epoch 23 | iter 600/783] avg_loss=2.3137 geom=0.2109  pred=2.1686 style=0.0889
+Epoch 23 done in 130.6s | loss=2.3305
+[Epoch 24 | iter 200/783] avg_loss=2.2226 geom=0.1608  pred=2.1205 style=0.1100
+[Epoch 24 | iter 400/783] avg_loss=2.2420 geom=0.1563  pred=2.2579 style=0.1224
+[Epoch 24 | iter 600/783] avg_loss=2.2561 geom=0.2231  pred=1.7365 style=0.0804
+Epoch 24 done in 129.8s | loss=2.2630
+[Epoch 25 | iter 200/783] avg_loss=2.1403 geom=0.1830  pred=2.3576 style=0.1491
+[Epoch 25 | iter 400/783] avg_loss=2.1679 geom=0.0207  pred=2.1741 style=0.1355
+[Epoch 25 | iter 600/783] avg_loss=2.1833 geom=0.2950  pred=2.0634 style=0.1084
+Epoch 25 done in 130.1s | loss=2.1908
+[Epoch 26 | iter 200/783] avg_loss=2.0637 geom=0.2886  pred=2.2273 style=0.1181
+[Epoch 26 | iter 400/783] avg_loss=2.0978 geom=0.2219  pred=2.3389 style=0.1767
+[Epoch 26 | iter 600/783] avg_loss=2.1137 geom=0.1760  pred=1.9470 style=0.1815
+Epoch 26 done in 129.8s | loss=2.1267
+[Epoch 27 | iter 200/783] avg_loss=1.9973 geom=0.1882  pred=1.7685 style=0.0963
+[Epoch 27 | iter 400/783] avg_loss=2.0260 geom=0.3833  pred=2.2252 style=0.1614
+[Epoch 27 | iter 600/783] avg_loss=2.0310 geom=0.2282  pred=2.1704 style=0.1299
+Epoch 27 done in 129.5s | loss=2.0460
+[Epoch 28 | iter 200/783] avg_loss=1.9332 geom=0.1859  pred=1.7416 style=0.0975
+[Epoch 28 | iter 400/783] avg_loss=1.9557 geom=0.1706  pred=1.5153 style=0.1205
+[Epoch 28 | iter 600/783] avg_loss=1.9733 geom=0.2179  pred=1.8745 style=0.1192
+Epoch 28 done in 130.0s | loss=1.9785
+[Epoch 29 | iter 200/783] avg_loss=1.8278 geom=0.1073  pred=1.5600 style=0.0758
+[Epoch 29 | iter 400/783] avg_loss=1.8531 geom=0.1315  pred=1.5613 style=0.1435
+[Epoch 29 | iter 600/783] avg_loss=1.8944 geom=0.1110  pred=2.0984 style=0.1121
+Epoch 29 done in 128.6s | loss=1.9071
+[Epoch 30 | iter 200/783] avg_loss=1.7747 geom=0.0929  pred=1.8776 style=0.1114
+[Epoch 30 | iter 400/783] avg_loss=1.8004 geom=0.1561  pred=1.8744 style=0.1331
+[Epoch 30 | iter 600/783] avg_loss=1.8197 geom=0.1820  pred=1.7796 style=0.0952
+Epoch 30 done in 129.1s | loss=1.8347
+[Epoch 31 | iter 200/783] avg_loss=1.7367 geom=0.0448  pred=1.8677 style=0.1683
+[Epoch 31 | iter 400/783] avg_loss=1.7377 geom=0.2336  pred=2.4378 style=0.1517
+[Epoch 31 | iter 600/783] avg_loss=1.7494 geom=0.2710  pred=1.6033 style=0.1279
+Epoch 31 done in 130.1s | loss=1.7591
+[Epoch 32 | iter 200/783] avg_loss=1.6530 geom=0.2630  pred=1.9484 style=0.1434
+[Epoch 32 | iter 400/783] avg_loss=1.6598 geom=0.2628  pred=1.2599 style=0.0890
+[Epoch 32 | iter 600/783] avg_loss=1.6754 geom=0.3772  pred=1.3947 style=0.1026
+Epoch 32 done in 129.0s | loss=1.6882
+[Epoch 33 | iter 200/783] avg_loss=1.5555 geom=0.2434  pred=1.6914 style=0.1060
+[Epoch 33 | iter 400/783] avg_loss=1.5842 geom=0.2560  pred=1.5627 style=0.1428
+[Epoch 33 | iter 600/783] avg_loss=1.6081 geom=0.1364  pred=1.9730 style=0.1508
+Epoch 33 done in 130.5s | loss=1.6255
+[Epoch 34 | iter 200/783] avg_loss=1.4910 geom=0.0843  pred=1.2166 style=0.1229
+[Epoch 34 | iter 400/783] avg_loss=1.5132 geom=0.1039  pred=1.5050 style=0.1036
+[Epoch 34 | iter 600/783] avg_loss=1.5359 geom=0.4376  pred=1.4324 style=0.1062
+Epoch 34 done in 132.4s | loss=1.5479
+[Epoch 35 | iter 200/783] avg_loss=1.4456 geom=0.2780  pred=1.2170 style=0.1346
+[Epoch 35 | iter 400/783] avg_loss=1.4583 geom=0.1862  pred=1.4898 style=0.1318
+[Epoch 35 | iter 600/783] avg_loss=1.4800 geom=0.2699  pred=1.4641 style=0.0888
+Epoch 35 done in 129.4s | loss=1.4955
+[Epoch 36 | iter 200/783] avg_loss=1.3664 geom=0.2040  pred=1.3346 style=0.1151
+[Epoch 36 | iter 400/783] avg_loss=1.4007 geom=0.4829  pred=1.3392 style=0.1277
+[Epoch 36 | iter 600/783] avg_loss=1.4194 geom=0.1474  pred=1.6671 style=0.1206
+Epoch 36 done in 129.0s | loss=1.4294
+[Epoch 37 | iter 200/783] avg_loss=1.3207 geom=0.2310  pred=1.1896 style=0.0692
+[Epoch 37 | iter 400/783] avg_loss=1.3450 geom=0.1592  pred=1.0355 style=0.0996
+[Epoch 37 | iter 600/783] avg_loss=1.3552 geom=0.3126  pred=0.9603 style=0.1288
+Epoch 37 done in 129.7s | loss=1.3710
+[Epoch 38 | iter 200/783] avg_loss=1.2688 geom=0.1385  pred=0.9994 style=0.1480
+[Epoch 38 | iter 400/783] avg_loss=1.2729 geom=0.0957  pred=1.0819 style=0.1432
+[Epoch 38 | iter 600/783] avg_loss=1.2926 geom=0.3819  pred=0.8958 style=0.1387
+Epoch 38 done in 131.1s | loss=1.3128
+[Epoch 39 | iter 200/783] avg_loss=1.1929 geom=0.1036  pred=1.2314 style=0.1255
+[Epoch 39 | iter 400/783] avg_loss=1.2274 geom=0.2980  pred=1.1440 style=0.1500
+[Epoch 39 | iter 600/783] avg_loss=1.2481 geom=0.2041  pred=0.8715 style=0.1259
+Epoch 39 done in 130.1s | loss=1.2554
+[Epoch 40 | iter 200/783] avg_loss=1.1542 geom=0.2362  pred=1.2797 style=0.1371
+[Epoch 40 | iter 400/783] avg_loss=1.1680 geom=0.1495  pred=1.3679 style=0.1829
+[Epoch 40 | iter 600/783] avg_loss=1.1815 geom=0.2134  pred=0.9102 style=0.1863
+Epoch 40 done in 130.1s | loss=1.2025
+[Epoch 41 | iter 200/783] avg_loss=1.1410 geom=0.2579  pred=0.8705 style=0.1867
+[Epoch 41 | iter 400/783] avg_loss=1.1398 geom=0.2544  pred=0.8666 style=0.1014
+[Epoch 41 | iter 600/783] avg_loss=1.1460 geom=0.1310  pred=1.0179 style=0.0779
+Epoch 41 done in 130.1s | loss=1.1600
+[Epoch 42 | iter 200/783] avg_loss=1.0815 geom=0.3397  pred=0.6109 style=0.1094
+[Epoch 42 | iter 400/783] avg_loss=1.0934 geom=0.2504  pred=1.3885 style=0.1058
+[Epoch 42 | iter 600/783] avg_loss=1.1006 geom=0.0946  pred=0.9580 style=0.0926
+Epoch 42 done in 129.7s | loss=1.1176
+[Epoch 43 | iter 200/783] avg_loss=1.0359 geom=0.1485  pred=1.2629 style=0.1621
+[Epoch 43 | iter 400/783] avg_loss=1.0565 geom=0.0796  pred=1.1651 style=0.1201
+[Epoch 43 | iter 600/783] avg_loss=1.0684 geom=0.1421  pred=1.0271 style=0.1072
+Epoch 43 done in 129.3s | loss=1.0783
+[Epoch 44 | iter 200/783] avg_loss=0.9918 geom=0.1669  pred=0.7727 style=0.1258
+[Epoch 44 | iter 400/783] avg_loss=1.0118 geom=0.3814  pred=1.2055 style=0.1566
+[Epoch 44 | iter 600/783] avg_loss=1.0281 geom=0.2573  pred=1.0356 style=0.1586
+Epoch 44 done in 131.0s | loss=1.0382
+[Epoch 45 | iter 200/783] avg_loss=0.9636 geom=0.2835  pred=0.8889 style=0.1556
+[Epoch 45 | iter 400/783] avg_loss=0.9903 geom=0.2381  pred=1.0552 style=0.1333
+[Epoch 45 | iter 600/783] avg_loss=0.9996 geom=0.1730  pred=1.1926 style=0.1347
+Epoch 45 done in 129.7s | loss=1.0120
+[Epoch 46 | iter 200/783] avg_loss=0.9345 geom=0.3559  pred=0.8205 style=0.1173
+[Epoch 46 | iter 400/783] avg_loss=0.9422 geom=0.2085  pred=0.9815 style=0.1614
+[Epoch 46 | iter 600/783] avg_loss=0.9625 geom=0.0941  pred=0.6294 style=0.1246
+Epoch 46 done in 130.0s | loss=0.9717
+[Epoch 47 | iter 200/783] avg_loss=0.9000 geom=0.1310  pred=1.1018 style=0.1710
+[Epoch 47 | iter 400/783] avg_loss=0.9141 geom=0.1188  pred=0.5390 style=0.0737
+[Epoch 47 | iter 600/783] avg_loss=0.9264 geom=0.1882  pred=0.8567 style=0.1650
+Epoch 47 done in 130.7s | loss=0.9368
+[Epoch 48 | iter 200/783] avg_loss=0.8479 geom=0.4910  pred=0.6524 style=0.1430
+[Epoch 48 | iter 400/783] avg_loss=0.8666 geom=0.0432  pred=0.7791 style=0.1724
+[Epoch 48 | iter 600/783] avg_loss=0.8881 geom=0.2750  pred=1.1104 style=0.1918
+Epoch 48 done in 133.0s | loss=0.9016
+[Epoch 49 | iter 200/783] avg_loss=0.8394 geom=0.4991  pred=1.0195 style=0.1561
+[Epoch 49 | iter 400/783] avg_loss=0.8765 geom=0.2243  pred=0.9582 style=0.0779
+[Epoch 49 | iter 600/783] avg_loss=0.8779 geom=0.1639  pred=1.0011 style=0.1127
+Epoch 49 done in 130.0s | loss=0.8867
+[Epoch 50 | iter 200/783] avg_loss=0.8105 geom=0.3508  pred=0.8172 style=0.1108
+[Epoch 50 | iter 400/783] avg_loss=0.8404 geom=0.3190  pred=1.0429 style=0.1981
+[Epoch 50 | iter 600/783] avg_loss=0.8472 geom=0.2300  pred=1.1471 style=0.1277
+Epoch 50 done in 129.6s | loss=0.8630
+[Epoch 51 | iter 200/783] avg_loss=0.8057 geom=0.2798  pred=0.7923 style=0.1193
+[Epoch 51 | iter 400/783] avg_loss=0.8162 geom=0.1568  pred=0.7092 style=0.1287
+[Epoch 51 | iter 600/783] avg_loss=0.8271 geom=0.1268  pred=0.6074 style=0.1353
+Epoch 51 done in 131.0s | loss=0.8364
+[Epoch 52 | iter 200/783] avg_loss=0.7705 geom=0.2480  pred=0.5344 style=0.1054
+[Epoch 52 | iter 400/783] avg_loss=0.7873 geom=0.1273  pred=0.8428 style=0.1610
+[Epoch 52 | iter 600/783] avg_loss=0.8038 geom=0.0724  pred=0.6124 style=0.1295
+Epoch 52 done in 130.1s | loss=0.8170
+[Epoch 53 | iter 200/783] avg_loss=0.7570 geom=0.1152  pred=1.1844 style=0.1134
+[Epoch 53 | iter 400/783] avg_loss=0.7669 geom=0.2458  pred=0.9145 style=0.1751
+[Epoch 53 | iter 600/783] avg_loss=0.7821 geom=0.2458  pred=0.9786 style=0.1908
+Epoch 53 done in 131.6s | loss=0.7951
+[Epoch 54 | iter 200/783] avg_loss=0.7509 geom=0.1752  pred=0.5570 style=0.1684
+[Epoch 54 | iter 400/783] avg_loss=0.7649 geom=0.1716  pred=0.6952 style=0.0946
+[Epoch 54 | iter 600/783] avg_loss=0.7744 geom=0.1286  pred=0.4802 style=0.1345
+Epoch 54 done in 130.1s | loss=0.7786
+[Epoch 55 | iter 200/783] avg_loss=0.7425 geom=0.1755  pred=0.6243 style=0.1239
+[Epoch 55 | iter 400/783] avg_loss=0.7473 geom=0.2990  pred=0.6097 style=0.1812
+[Epoch 55 | iter 600/783] avg_loss=0.7609 geom=0.1689  pred=0.4944 style=0.0834
+Epoch 55 done in 130.2s | loss=0.7711
+[Epoch 56 | iter 200/783] avg_loss=0.7252 geom=0.2759  pred=0.5409 style=0.0829
+[Epoch 56 | iter 400/783] avg_loss=0.7321 geom=0.1815  pred=0.5298 style=0.1369
+[Epoch 56 | iter 600/783] avg_loss=0.7492 geom=0.2545  pred=1.1235 style=0.1176
+Epoch 56 done in 131.3s | loss=0.7503
+[Epoch 57 | iter 200/783] avg_loss=0.7273 geom=0.1500  pred=0.5647 style=0.0766
+[Epoch 57 | iter 400/783] avg_loss=0.7372 geom=0.3147  pred=0.7990 style=0.1093
+[Epoch 57 | iter 600/783] avg_loss=0.7471 geom=0.3171  pred=0.7656 style=0.1231
+Epoch 57 done in 131.8s | loss=0.7529
+[Epoch 58 | iter 200/783] avg_loss=0.6916 geom=0.1850  pred=0.4235 style=0.1463
+[Epoch 58 | iter 400/783] avg_loss=0.7108 geom=0.2016  pred=1.0358 style=0.1707
+[Epoch 58 | iter 600/783] avg_loss=0.7170 geom=0.1336  pred=0.8472 style=0.1286
+Epoch 58 done in 130.6s | loss=0.7239
+[Epoch 59 | iter 200/783] avg_loss=0.6943 geom=0.2767  pred=0.5601 style=0.1691
+[Epoch 59 | iter 400/783] avg_loss=0.6949 geom=0.1409  pred=0.6731 style=0.1062
+[Epoch 59 | iter 600/783] avg_loss=0.7034 geom=0.2546  pred=0.6384 style=0.1800
+Epoch 59 done in 128.7s | loss=0.7116
+[Epoch 60 | iter 200/783] avg_loss=0.6630 geom=0.1894  pred=0.5838 style=0.3128
+[Epoch 60 | iter 400/783] avg_loss=0.6768 geom=0.0831  pred=0.7148 style=0.1392
+[Epoch 60 | iter 600/783] avg_loss=0.6909 geom=0.0575  pred=0.4286 style=0.1265
+Epoch 60 done in 129.5s | loss=0.6927
+[Epoch 61 | iter 200/783] avg_loss=0.6563 geom=0.0931  pred=0.7846 style=0.2143
+[Epoch 61 | iter 400/783] avg_loss=0.6697 geom=0.1398  pred=0.6711 style=0.1028
+[Epoch 61 | iter 600/783] avg_loss=0.6720 geom=0.1792  pred=0.4613 style=0.1160
+Epoch 61 done in 130.0s | loss=0.6799
+[Epoch 62 | iter 200/783] avg_loss=0.6456 geom=0.2871  pred=0.7033 style=0.2259
+[Epoch 62 | iter 400/783] avg_loss=0.6586 geom=0.0680  pred=0.6986 style=0.1242
+[Epoch 62 | iter 600/783] avg_loss=0.6728 geom=0.2191  pred=0.4837 style=0.0876
+Epoch 62 done in 130.1s | loss=0.6761
+[Epoch 63 | iter 200/783] avg_loss=0.6545 geom=0.1874  pred=0.7947 style=0.1352
+[Epoch 63 | iter 400/783] avg_loss=0.6511 geom=0.2092  pred=0.9323 style=0.1992
+[Epoch 63 | iter 600/783] avg_loss=0.6657 geom=0.0988  pred=0.4420 style=0.1757
+Epoch 63 done in 130.1s | loss=0.6683
+[Epoch 64 | iter 200/783] avg_loss=0.6198 geom=0.1308  pred=0.4247 style=0.1341
+[Epoch 64 | iter 400/783] avg_loss=0.6244 geom=0.2950  pred=0.4806 style=0.1455
+[Epoch 64 | iter 600/783] avg_loss=0.6402 geom=0.3512  pred=0.6161 style=0.1793
+Epoch 64 done in 129.6s | loss=0.6507
+[Epoch 65 | iter 200/783] avg_loss=0.6175 geom=0.0821  pred=0.7174 style=0.1081
+[Epoch 65 | iter 400/783] avg_loss=0.6283 geom=0.4687  pred=0.4514 style=0.1474
+[Epoch 65 | iter 600/783] avg_loss=0.6431 geom=0.3159  pred=0.7601 style=0.1309
+Epoch 65 done in 129.6s | loss=0.6456
+[Epoch 66 | iter 200/783] avg_loss=0.6156 geom=0.1930  pred=0.6206 style=0.1145
+[Epoch 66 | iter 400/783] avg_loss=0.6243 geom=0.2536  pred=0.6776 style=0.1451
+[Epoch 66 | iter 600/783] avg_loss=0.6325 geom=0.3356  pred=0.6190 style=0.1265
+Epoch 66 done in 131.3s | loss=0.6385
+[Epoch 67 | iter 200/783] avg_loss=0.5962 geom=0.1046  pred=0.3859 style=0.1156
+[Epoch 67 | iter 400/783] avg_loss=0.6108 geom=0.0477  pred=0.3776 style=0.1504
+[Epoch 67 | iter 600/783] avg_loss=0.6208 geom=0.1969  pred=0.5829 style=0.1409
+Epoch 67 done in 129.7s | loss=0.6268
+[Epoch 68 | iter 200/783] avg_loss=0.6099 geom=0.3417  pred=0.6748 style=0.1686
+[Epoch 68 | iter 400/783] avg_loss=0.6143 geom=0.1273  pred=0.6720 style=0.1270
+[Epoch 68 | iter 600/783] avg_loss=0.6224 geom=0.4387  pred=0.4470 style=0.0955
+Epoch 68 done in 129.9s | loss=0.6246
+[Epoch 69 | iter 200/783] avg_loss=0.6019 geom=0.1847  pred=0.6352 style=0.1261
+[Epoch 69 | iter 400/783] avg_loss=0.6081 geom=0.1507  pred=0.4173 style=0.1363
+[Epoch 69 | iter 600/783] avg_loss=0.6134 geom=0.2461  pred=0.4733 style=0.1245
+Epoch 69 done in 130.3s | loss=0.6176
+[Epoch 70 | iter 200/783] avg_loss=0.5870 geom=0.1280  pred=0.7589 style=0.1273
+[Epoch 70 | iter 400/783] avg_loss=0.5895 geom=0.2844  pred=0.6346 style=0.1466
+[Epoch 70 | iter 600/783] avg_loss=0.6010 geom=0.2155  pred=0.8738 style=0.1576
+Epoch 70 done in 130.9s | loss=0.6081
+[Epoch 71 | iter 200/783] avg_loss=0.6009 geom=0.2398  pred=0.5172 style=0.1123
+[Epoch 71 | iter 400/783] avg_loss=0.6050 geom=0.2832  pred=0.6180 style=0.1854
+[Epoch 71 | iter 600/783] avg_loss=0.6042 geom=0.2047  pred=0.5096 style=0.1028
+Epoch 71 done in 129.9s | loss=0.6077
+[Epoch 72 | iter 200/783] avg_loss=0.5763 geom=0.2281  pred=0.6212 style=0.1235
+[Epoch 72 | iter 400/783] avg_loss=0.5863 geom=0.2152  pred=0.5411 style=0.1315
+[Epoch 72 | iter 600/783] avg_loss=0.5924 geom=0.1681  pred=0.8979 style=0.1817
+Epoch 72 done in 129.7s | loss=0.5988
+[Epoch 73 | iter 200/783] avg_loss=0.5678 geom=0.1540  pred=0.5057 style=0.1081
+[Epoch 73 | iter 400/783] avg_loss=0.5732 geom=0.2237  pred=0.5082 style=0.1176
+[Epoch 73 | iter 600/783] avg_loss=0.5841 geom=0.1174  pred=0.5927 style=0.1294
+Epoch 73 done in 130.3s | loss=0.5868
+[Epoch 74 | iter 200/783] avg_loss=0.5663 geom=0.1753  pred=0.4845 style=0.1144
+[Epoch 74 | iter 400/783] avg_loss=0.5738 geom=0.2852  pred=0.5611 style=0.1914
+[Epoch 74 | iter 600/783] avg_loss=0.5813 geom=0.5246  pred=0.7545 style=0.1190
+Epoch 74 done in 131.6s | loss=0.5874
+[Epoch 75 | iter 200/783] avg_loss=0.5551 geom=0.3044  pred=0.7268 style=0.1414
+[Epoch 75 | iter 400/783] avg_loss=0.5648 geom=0.2520  pred=0.5803 style=0.1411
+[Epoch 75 | iter 600/783] avg_loss=0.5704 geom=0.3385  pred=0.4910 style=0.1264
+Epoch 75 done in 129.9s | loss=0.5755
+[Epoch 76 | iter 200/783] avg_loss=0.5498 geom=0.1784  pred=0.6953 style=0.0875
+[Epoch 76 | iter 400/783] avg_loss=0.5581 geom=0.3117  pred=0.9712 style=0.0942
+[Epoch 76 | iter 600/783] avg_loss=0.5607 geom=0.1201  pred=0.4680 style=0.1033
+Epoch 76 done in 130.4s | loss=0.5704
+[Epoch 77 | iter 200/783] avg_loss=0.5622 geom=0.1215  pred=0.5187 style=0.2008
+[Epoch 77 | iter 400/783] avg_loss=0.5625 geom=0.0695  pred=0.5477 style=0.1282
+[Epoch 77 | iter 600/783] avg_loss=0.5636 geom=0.3973  pred=0.4143 style=0.1105
+Epoch 77 done in 130.0s | loss=0.5674
+[Epoch 78 | iter 200/783] avg_loss=0.5470 geom=0.2562  pred=0.6239 style=0.0937
+[Epoch 78 | iter 400/783] avg_loss=0.5550 geom=0.0381  pred=0.4222 style=0.1425
+[Epoch 78 | iter 600/783] avg_loss=0.5599 geom=0.1744  pred=0.5171 style=0.1836
+Epoch 78 done in 130.3s | loss=0.5667
+[Epoch 79 | iter 200/783] avg_loss=0.5398 geom=0.1396  pred=0.4471 style=0.1609
+[Epoch 79 | iter 400/783] avg_loss=0.5432 geom=0.1767  pred=0.5731 style=0.1602
+[Epoch 79 | iter 600/783] avg_loss=0.5542 geom=0.2277  pred=0.5244 style=0.1302
+Epoch 79 done in 130.6s | loss=0.5579
+[Epoch 80 | iter 200/783] avg_loss=0.5198 geom=0.1167  pred=0.3862 style=0.1906
+[Epoch 80 | iter 400/783] avg_loss=0.5372 geom=0.1582  pred=0.4494 style=0.0875
+[Epoch 80 | iter 600/783] avg_loss=0.5419 geom=0.3281  pred=0.7182 style=0.1397
+Epoch 80 done in 129.1s | loss=0.5486
+[Epoch 81 | iter 200/783] avg_loss=0.5420 geom=0.1893  pred=0.7187 style=0.1709
+[Epoch 81 | iter 400/783] avg_loss=0.5428 geom=0.0521  pred=0.4749 style=0.0962
+[Epoch 81 | iter 600/783] avg_loss=0.5439 geom=0.0312  pred=0.3781 style=0.1925
+Epoch 81 done in 129.6s | loss=0.5497
+[Epoch 82 | iter 200/783] avg_loss=0.5098 geom=0.0875  pred=0.3972 style=0.1276
+[Epoch 82 | iter 400/783] avg_loss=0.5229 geom=0.0823  pred=0.5747 style=0.1077
+[Epoch 82 | iter 600/783] avg_loss=0.5306 geom=0.2413  pred=0.4551 style=0.0920
+Epoch 82 done in 131.2s | loss=0.5386
+[Epoch 83 | iter 200/783] avg_loss=0.5206 geom=0.2682  pred=0.5199 style=0.1220
+[Epoch 83 | iter 400/783] avg_loss=0.5286 geom=0.1534  pred=0.3864 style=0.0879
+[Epoch 83 | iter 600/783] avg_loss=0.5330 geom=0.4475  pred=0.6465 style=0.2080
+Epoch 83 done in 129.9s | loss=0.5404
+[Epoch 84 | iter 200/783] avg_loss=0.5192 geom=0.2303  pred=0.5145 style=0.1995
+[Epoch 84 | iter 400/783] avg_loss=0.5368 geom=0.1942  pred=0.6090 style=0.0902
+[Epoch 84 | iter 600/783] avg_loss=0.5392 geom=0.1153  pred=0.5056 style=0.0874
+Epoch 84 done in 129.3s | loss=0.5406
+[Epoch 85 | iter 200/783] avg_loss=0.5254 geom=0.2556  pred=0.2739 style=0.1099
+[Epoch 85 | iter 400/783] avg_loss=0.5312 geom=0.0907  pred=0.4872 style=0.1253
+[Epoch 85 | iter 600/783] avg_loss=0.5328 geom=0.2028  pred=0.4020 style=0.0830
+Epoch 85 done in 129.4s | loss=0.5368
+[Epoch 86 | iter 200/783] avg_loss=0.5152 geom=0.0831  pred=0.9867 style=0.1506
+[Epoch 86 | iter 400/783] avg_loss=0.5244 geom=0.1126  pred=0.5813 style=0.1484
+[Epoch 86 | iter 600/783] avg_loss=0.5295 geom=0.2021  pred=0.5314 style=0.1519
+Epoch 86 done in 129.7s | loss=0.5306
+[Epoch 87 | iter 200/783] avg_loss=0.5093 geom=0.2626  pred=0.3798 style=0.1041
+[Epoch 87 | iter 400/783] avg_loss=0.5081 geom=0.0153  pred=0.3437 style=0.0880
+[Epoch 87 | iter 600/783] avg_loss=0.5176 geom=0.2793  pred=0.6655 style=0.0970
+Epoch 87 done in 129.8s | loss=0.5250
+[Epoch 88 | iter 200/783] avg_loss=0.5027 geom=0.1094  pred=0.3896 style=0.1294
+[Epoch 88 | iter 400/783] avg_loss=0.5036 geom=0.1196  pred=0.6421 style=0.1363
+[Epoch 88 | iter 600/783] avg_loss=0.5135 geom=0.2494  pred=0.4468 style=0.1743
+Epoch 88 done in 129.9s | loss=0.5152
+[Epoch 89 | iter 200/783] avg_loss=0.5092 geom=0.3375  pred=0.4165 style=0.1920
+[Epoch 89 | iter 400/783] avg_loss=0.5121 geom=0.0951  pred=0.3006 style=0.1176
+[Epoch 89 | iter 600/783] avg_loss=0.5206 geom=0.1975  pred=0.3313 style=0.1293
+Epoch 89 done in 129.6s | loss=0.5235
+[Epoch 90 | iter 200/783] avg_loss=0.5088 geom=0.0816  pred=0.7450 style=0.1464
+[Epoch 90 | iter 400/783] avg_loss=0.5111 geom=0.2432  pred=0.5015 style=0.1271
+[Epoch 90 | iter 600/783] avg_loss=0.5131 geom=0.1645  pred=0.4951 style=0.1036
+Epoch 90 done in 130.0s | loss=0.5114
+[Epoch 91 | iter 200/783] avg_loss=0.4995 geom=0.2075  pred=0.3715 style=0.1133
+[Epoch 91 | iter 400/783] avg_loss=0.5047 geom=0.3092  pred=0.4775 style=0.1196
+[Epoch 91 | iter 600/783] avg_loss=0.5083 geom=0.3093  pred=0.4333 style=0.1110
+Epoch 91 done in 129.5s | loss=0.5120
+[Epoch 92 | iter 200/783] avg_loss=0.4775 geom=0.1795  pred=0.5733 style=0.0853
+[Epoch 92 | iter 400/783] avg_loss=0.4917 geom=0.2112  pred=0.4057 style=0.1398
+[Epoch 92 | iter 600/783] avg_loss=0.5026 geom=0.3288  pred=0.4261 style=0.1099
+Epoch 92 done in 129.2s | loss=0.5053
+[Epoch 93 | iter 200/783] avg_loss=0.4998 geom=0.2253  pred=0.3549 style=0.1445
+[Epoch 93 | iter 400/783] avg_loss=0.4987 geom=0.2246  pred=0.6761 style=0.1162
+[Epoch 93 | iter 600/783] avg_loss=0.5032 geom=0.5012  pred=0.5270 style=0.1811
+Epoch 93 done in 130.1s | loss=0.5051
+[Epoch 94 | iter 200/783] avg_loss=0.4911 geom=0.3155  pred=0.4292 style=0.1231
+[Epoch 94 | iter 400/783] avg_loss=0.4982 geom=0.0906  pred=0.3545 style=0.1141
+[Epoch 94 | iter 600/783] avg_loss=0.4994 geom=0.2987  pred=0.5457 style=0.2307
+Epoch 94 done in 132.8s | loss=0.5006
+[Epoch 95 | iter 200/783] avg_loss=0.4849 geom=0.1725  pred=0.3081 style=0.1536
+[Epoch 95 | iter 400/783] avg_loss=0.4940 geom=0.1797  pred=0.5503 style=0.0829
+[Epoch 95 | iter 600/783] avg_loss=0.4985 geom=0.2240  pred=0.5866 style=0.1454
+Epoch 95 done in 134.6s | loss=0.5029
+[Epoch 96 | iter 200/783] avg_loss=0.4775 geom=0.1490  pred=0.3981 style=0.0958
+[Epoch 96 | iter 400/783] avg_loss=0.4790 geom=0.1717  pred=0.2997 style=0.1315
+[Epoch 96 | iter 600/783] avg_loss=0.4851 geom=0.2265  pred=0.4585 style=0.1227
+Epoch 96 done in 132.1s | loss=0.4921
+[Epoch 97 | iter 200/783] avg_loss=0.4824 geom=0.3351  pred=0.3731 style=0.0884
+[Epoch 97 | iter 400/783] avg_loss=0.4844 geom=0.1338  pred=0.4252 style=0.1835
+[Epoch 97 | iter 600/783] avg_loss=0.4896 geom=0.2131  pred=0.9981 style=0.1543
+Epoch 97 done in 130.1s | loss=0.4884
+[Epoch 98 | iter 200/783] avg_loss=0.4765 geom=0.1143  pred=0.6320 style=0.1443
+[Epoch 98 | iter 400/783] avg_loss=0.4849 geom=0.4339  pred=0.3962 style=0.0933
+[Epoch 98 | iter 600/783] avg_loss=0.4886 geom=0.4385  pred=0.4198 style=0.0831
+Epoch 98 done in 129.5s | loss=0.4921
+[Epoch 99 | iter 200/783] avg_loss=0.4730 geom=0.2868  pred=0.4142 style=0.1504
+[Epoch 99 | iter 400/783] avg_loss=0.4772 geom=0.2104  pred=0.4295 style=0.1133
+[Epoch 99 | iter 600/783] avg_loss=0.4824 geom=0.0452  pred=0.5197 style=0.1559
+Epoch 99 done in 128.7s | loss=0.4863
+[Epoch 100 | iter 200/783] avg_loss=0.4578 geom=0.0588  pred=0.3079 style=0.0775
+[Epoch 100 | iter 400/783] avg_loss=0.4695 geom=0.2186  pred=0.4420 style=0.1264
+[Epoch 100 | iter 600/783] avg_loss=0.4778 geom=0.0434  pred=0.3082 style=0.0840
+Epoch 100 done in 129.0s | loss=0.4851
+Training finished.
+Best model saved to ./checkpoints/planner_best.pt

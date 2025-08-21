@@ -16,10 +16,11 @@ dataset:
     max_panels: 30
     max_dialogs: 30
     max_characters: 30
-    loader_num_workers: 4
+    num_workers: 4
   train:
-    data_path: "DiffSensei-main/checkpoints/mangazero/f_annotations_style.json"
+    data_path: "DiffSensei-main/checkpoints/mangazero/annotations_3200_4.json"
     image_dir: "DiffSensei-main/checkpoints/mangazero/images"
+    text_encoder_path: "/data/model/clip-vit-large-patch14"
     max_num_samples: null
     specific_image_ids: [ ]
     shuffle: true
@@ -31,9 +32,10 @@ training:
   lr: 1e-4
   weight_decay: 0.01
   clip_grad_norm: 1.0
-  lambda_style: 0.2         # 风格损失权重
+  lambda_style: 20.0         # 风格损失权重
+  lambda_geom: 20.0
   style_cfg_dropout: 0.1    # CFG 风格丢弃概率 p（训练时每样本独立丢弃风格）
-  save_every: 1
+  save_every: 100
   save_dir: "./checkpoints"
 
 

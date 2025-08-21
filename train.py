@@ -6,9 +6,8 @@ import yaml
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-
-from utils.datasets import MangaLayoutDataset
-from utils.collate import collate_fn
+from transformers import CLIPTokenizer, CLIPTextModel
+from utils.datasets import MangaLayoutDataset, collate_fn
 from models.layout_planner.planner import LayoutPlanner
 from utils.losses import LayoutCompositeLoss
 
@@ -41,7 +40,7 @@ def main():
     parser.add_argument("--config", type=str, default="planner.yaml")
     parser.add_argument("--save_dir", type=str, default="./checkpoints")
     parser.add_argument("--epochs", type=int, default=100, help="")
-    parser.add_argument("--batch_size", type=int, default=8, help="")
+    parser.add_argument("--batch_size", type=int, default=64, help="")
     args = parser.parse_args()
 
     cfg = parse_yaml(args.config)
@@ -57,6 +56,13 @@ def main():
     
     seed_everything(42)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+    # 加载文本编码器和分词器
+    text_encoder_path = train_cfg.get("text_encoder_path")
+    text_encoder = CLIPTextModel.from_pretrained(text_encoder_path)
+    tokenizer = CLIPTokenizer.from_pretrained(text_encoder_path)
+    text_encoder.to(device)
+    text_encoder.requires_grad_(False)
 
     # Dataset & Loader
     dataset = MangaLayoutDataset(
@@ -75,18 +81,14 @@ def main():
         dataset,
         batch_size=train_cfg["batch_size"],
         shuffle=train_cfg.get("shuffle", True),
-        num_workers=ds_cfg["parameters"]["loader_num_workers"],
-        # collate_fn=lambda bl: collate_fn(bl, {
-        #     "max_elements": ds_cfg.get("max_elements", 100),
-        #     "max_panels": dataset.cfg["max_panels"],
-        #     "max_dialogs": dataset.cfg["max_dialogs"],
-        #     "max_chars": dataset.cfg["max_chars"],
-        # }),
-        collate_fn=lambda batch: collate_fn(batch, cfg),
+        num_workers=ds_cfg["parameters"]["num_workers"],
+        collate_fn=lambda b: collate_fn(b, cfg),
+        # collate_fn=lambda batch: collate_fn(batch, cfg, text_encoder=text_encoder, tokenizer=tokenizer, device=device),
         pin_memory=True,
     )
 
     # model
+    
 
     planner = LayoutPlanner(
         encoder_cfg={
@@ -96,6 +98,7 @@ def main():
         heads_cfg={
             "num_panel_classes": len(panel_shapes),
             "num_dialog_shapes": len(bubble_shapes),  # 不预测 bubble shape
+            "layout_types": layout_types
         }
     ).to(device)
 
@@ -114,7 +117,6 @@ def main():
     save_dir = train_params.get("save_dir", "./checkpoints")
     os.makedirs(save_dir, exist_ok=True)
 
-    epochs = int(train_params.get("epochs", 20))
     clip_grad = float(train_params.get("clip_grad_norm", 1.0))
 
     best_loss = float("inf")
@@ -127,6 +129,40 @@ def main():
             batch = {k: (v.to(device) if isinstance(v, torch.Tensor) else
                          {kk: vv.to(device) for kk, vv in v.items()} if isinstance(v, dict) else v)
                      for k, v in batch.items()}
+            
+            # 在主进程中进行 GPU 编码
+            captions_nested = batch.pop("panel_captions")
+            flat_captions = [c for sub in captions_nested for c in sub]
+
+            if flat_captions:
+                inputs = tokenizer(flat_captions, padding=True, truncation=True, return_tensors="pt").to(device)
+                with torch.no_grad():
+                    emb = text_encoder(**inputs).last_hidden_state[:, 0, :]
+                per_sample_embeds = []
+                idx = 0
+                for caps in captions_nested:
+                    n = len(caps)
+                    if n > 0:
+                        per_sample_embeds.append(emb[idx:idx+n])
+                    else:
+                        per_sample_embeds.append(torch.empty((0, emb.shape[-1]), device=device))
+                    idx += n
+            else:
+                per_sample_embeds = [torch.empty((0, text_encoder.config.hidden_size), device=device) for _ in captions_nested]
+
+            # 按 config 固定长度 pad 到 max_panels
+            max_panels = cfg["dataset"]["parameters"]["max_panels"]
+            D = text_encoder.config.hidden_size
+            padded_embeds = []
+            for e in per_sample_embeds:
+                if e.shape[0] < max_panels:
+                    pad = torch.zeros((max_panels - e.shape[0], D), device=device)
+                    e = torch.cat([e, pad], dim=0)
+                elif e.shape[0] > max_panels:
+                    e = e[:max_panels]
+                padded_embeds.append(e)
+
+            batch["panel_caption_embeddings"] = torch.stack(padded_embeds, dim=0)
 
             # Apply CFG-style dropout to style_vector
             batch["style_vector"] = apply_style_cfg_dropout(batch["style_vector"], style_dropout_p)
@@ -144,9 +180,9 @@ def main():
             running += float(loss.item())
             global_step += 1
 
-            if (it + 1) % 50 == 0:
+            if (it + 1) % 200 == 0:
                 avg = running / (it + 1)
-                print(f"[Epoch {epoch} | iter {it+1}/{len(loader)}] avg_loss={avg:.4f} geom={logs['geom_loss']:.4f} style={logs['style_loss']:.4f}")
+                print(f"[Epoch {epoch} | iter {it+1}/{len(loader)}] avg_loss={avg:.4f} geom={logs['geom_loss']:.4f}  pred={logs['pred_loss']:.4f} style={logs['style_loss']:.4f}")
 
         epoch_loss = running / max(1, len(loader))
         print(f"Epoch {epoch} done in {time.time()-t0:.1f}s | loss={epoch_loss:.4f}")
