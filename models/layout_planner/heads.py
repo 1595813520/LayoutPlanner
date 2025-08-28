@@ -47,15 +47,27 @@ class ElementBBoxHead(nn.Module):
     """Dialog/Character BBox Prediction Head"""
     def __init__(self, d_model):
         super().__init__()
+        # self.mlp = nn.Sequential(
+        #     nn.Linear(d_model, d_model // 2),
+        #     nn.ReLU(),
+        #     nn.Linear(d_model // 2, 4),  # 输出 (x_center, y_center, width, height)
+        #     nn.Sigmoid()  # 归一化到 [0, 1]
+        # )
+        # 输入维度加倍，因为拼接了父panel特征
         self.mlp = nn.Sequential(
-            nn.Linear(d_model, d_model // 2),
+            nn.Linear(d_model * 2, d_model),
             nn.ReLU(),
-            nn.Linear(d_model // 2, 4),  # 输出 (x_center, y_center, width, height)
-            nn.Sigmoid()  # 归一化到 [0, 1]
+            nn.Linear(d_model, 4),
+            nn.Sigmoid()
         )
     
-    def forward(self, x):
-        return self.mlp(x)  # Shape: (num_elements, 4)
+    # def forward(self, x):
+    #     return self.mlp(x)  # Shape: (num_elements, 4)
+    def forward(self, x, parent_panel_features):
+        if parent_panel_features is None:
+            parent_panel_features = torch.zeros_like(x)
+        fused = torch.cat([x, parent_panel_features], dim=-1)
+        return self.mlp(fused)
 
 class BreakoutHead(nn.Module):
     """Breakout Prediction Head (Classification + Ratio)"""
@@ -170,7 +182,9 @@ class ParallelPredictionHeads(nn.Module):
 
             # --- Dialog ---
             if dialog_features.numel() > 0:
-                raw_dialog_bbox = self.element_bbox_head(dialog_features)
+                # raw_dialog_bbox = self.element_bbox_head(dialog_features)
+                raw_dialog_bbox = self.element_bbox_head(dialog_features, dialog_parent_feats) # <-- 传入父特征
+
                 bl, br = self.breakout_head(dialog_features, dialog_parent_feats)
                 raw_shape_logits = self.dialog_shape_head(dialog_features)
 
@@ -197,7 +211,9 @@ class ParallelPredictionHeads(nn.Module):
 
             # --- Character ---
             if character_features.numel() > 0:
-                raw_char_bbox = self.element_bbox_head(character_features)
+                # raw_char_bbox = self.element_bbox_head(character_features)
+                raw_char_bbox = self.element_bbox_head(character_features, char_parent_feats) # <-- 传入父特征
+
                 bl, br = self.breakout_head(character_features, char_parent_feats)
 
                 bbox_pad = torch.zeros((B, self.max_chars, 4), device=device)

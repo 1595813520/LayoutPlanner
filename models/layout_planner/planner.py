@@ -28,14 +28,17 @@ class LayoutPlanner(nn.Module):
         enc_outputs = self.encoder(
             element_types=batch["element_types"],
             element_indices=batch["element_indices"],
+            element_local_indices=batch["element_local_indices"],
             parent_panel_indices=batch["parent_panel_indices"],
             style_vector=batch["style_vector"],
-            panel_caption_embeddings=batch.get("panel_caption_embeddings") # 使用 .get 以保持向后兼容
+            aspect_ratios=batch["aspect_ratios"],   
+            panel_caption_embeddings=batch["panel_caption_embeddings"],
+            character_ids=batch["character_ids"],
+            character_visual_embeddings=batch["character_visual_embeddings"]
         )
         seq_feats = enc_outputs["seq_feats"]  # (B, S, D)
 
         # --- 2. Heads 前向传播 (直接处理整个批次) ---
-        # 移除 for 循环，将整个批次的特征和类型信息传递给 heads
         predictions = self.heads(
             lfm_output=seq_feats,
             element_types=batch["element_types"],

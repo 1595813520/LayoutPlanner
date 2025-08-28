@@ -85,7 +85,6 @@ class TransformerBlock(nn.Module):
 
 class TokenLayoutEncoder(nn.Module):
     """
-    直接吃:
       - element_types (B,S)
       - element_indices (B,S)
       - parent_panel_indices (B,S)  对于 panel/page = -1; dialog/char = [0..#panels-1] 或 -1
@@ -94,22 +93,19 @@ class TokenLayoutEncoder(nn.Module):
       - seq_feats (B,S,d_model)     给 heads 用
       - key_padding_mask (B,S)      供可选的 attention mask
     """
-    def __init__(self,
-                 max_elements: int,
-                 d_model: int,
-                 num_layers: int,
-                 num_heads: int,
-                 layout_types,
-                 caption_embed_dim: int = 768,
-                 use_positional_encoding: bool = True,
-                 use_final_ln: bool = True,
-                 dropout: float = 0.0):
+    def __init__(self, max_elements: int, max_characters: int, d_model: int, num_layers: int, num_heads: int, 
+                 layout_types, caption_embed_dim: int = 768, visual_embed_dim: int = 2048,
+                 use_positional_encoding: bool = True, use_final_ln: bool = True, dropout: float = 0.05):
         super().__init__()
         self.max_elements = max_elements
+        self.max_characters = max_characters
         self.d_model = d_model
         self.use_positional_encoding = use_positional_encoding
         self.use_final_ln = use_final_ln
         self.layout_types = layout_types
+        
+        self.local_index_embed = nn.Embedding(max_elements, d_model) # max_dialogs/chars中较大的一个
+        self.character_id_embed = nn.Embedding(max_characters, d_model)
 
         # token embeddings
         self.type_embed = nn.Embedding(5, d_model)                 # PAD/PAGE/PANEL/CHAR/DIALOG
@@ -124,6 +120,18 @@ class TokenLayoutEncoder(nn.Module):
         )
         
         self.caption_proj = nn.Linear(caption_embed_dim, d_model)
+        self.visual_proj = (
+            nn.Identity() if visual_embed_dim == d_model
+            else nn.Linear(visual_embed_dim, d_model)
+        )
+        self.gate_proj = nn.Linear(d_model, d_model)     # 门控融合
+        
+        self.aspect_ratio_mlp = nn.Sequential(
+            nn.Linear(1, d_model//2),
+            nn.ReLU(),
+            nn.Linear(d_model//2, d_model)
+        )
+        
 
         if use_positional_encoding:
             self.pos_embed = nn.Parameter(torch.zeros(1, max_elements, d_model))
@@ -142,7 +150,9 @@ class TokenLayoutEncoder(nn.Module):
         p = torch.where(p < 0, torch.zeros_like(p), p + 2)
         return torch.clamp(p, 0, max_elements+1)
 
-    def forward(self, element_types, element_indices, parent_panel_indices, style_vector, panel_caption_embeddings=None):
+    def forward(self, element_types, element_indices, element_local_indices, parent_panel_indices, 
+                style_vector, aspect_ratios, panel_caption_embeddings=None, 
+                character_ids=None, character_visual_embeddings=None):
         """
         element_types: (B,S) long
         element_indices: (B,S) long
@@ -153,15 +163,21 @@ class TokenLayoutEncoder(nn.Module):
         assert S <= self.max_elements, f"S={S} > max_elements={self.max_elements}"
 
         # 1. Base embed (type + index + parent)
-        x = self.type_embed(element_types) + self.index_embed(torch.clamp(element_indices, 0, self.max_elements-1))
+        # x = self.type_embed(element_types) + self.index_embed(torch.clamp(element_indices, 0, self.max_elements-1))
+        x = self.type_embed(element_types.long()) + self.index_embed(torch.clamp(element_indices, 0, self.max_elements-1).long())
+        # 新增
+        x = x + self.local_index_embed(torch.clamp(element_local_indices, 0, self.max_elements-1).long())
         # parent embed
         p_bucket = self._bucket_parent(parent_panel_indices, self.max_elements)  # (B,S)
-        x = x + self.parent_bucket(p_bucket)
+        x = x + self.parent_bucket(p_bucket.long())
 
-        # 2 inject style ONLY to PAGE tokens
+        # 2 注入 style 和 aspect_ratio 到 PAGE tokens
         is_page = (element_types == self.layout_types['TYPE_PAGE']).unsqueeze(-1)  # (B,S,1)
         style_e = self.style_mlp(style_vector).unsqueeze(1)   # (B,1,D)
-        x = x + style_e * is_page
+        
+        # 将长宽比 (B,) -> (B,1) -> MLP -> (B,1,D)
+        ar_e = self.aspect_ratio_mlp(aspect_ratios.unsqueeze(-1)).unsqueeze(1)
+        x = x + (style_e + ar_e) * is_page # 将两种全局条件一起注入
         
         # 3 Inject caption embeddings ONLY to PANEL tokens ---
         if panel_caption_embeddings is not None:
@@ -180,7 +196,8 @@ class TokenLayoutEncoder(nn.Module):
             batch_indices = torch.arange(B, device=x.device).unsqueeze(1).expand(-1, S)[is_panel]
             
             # Select the correct caption embedding for each panel token
-            selected_captions = caption_e[batch_indices, panel_indices]
+            # selected_captions = caption_e[batch_indices, panel_indices]
+            selected_captions = caption_e[batch_indices.long(), panel_indices.long()]
             
             # Place the selected caption embeddings into the correct sequence positions
             caption_injection[is_panel] = selected_captions
@@ -188,11 +205,45 @@ class TokenLayoutEncoder(nn.Module):
             # Add the caption embeddings to the base embeddings
             x = x + caption_injection
 
-        # 4. Add positional encoding
+        # 4: 注入 character 视觉嵌入
+        if character_visual_embeddings is not None:
+            is_char = (element_types == self.layout_types['TYPE_CHAR']) # (B, S)
+
+            # ---- 角色 ID 嵌入 ----
+            # character_ids: (B, S) long, 需在 collate_fn 中提供
+            char_ids = character_ids  # 假设作为 forward 额外参数传入
+            id_e = self.character_id_embed(torch.clamp(char_ids, 0, self.character_id_embed.num_embeddings - 1))
+
+            # ---- 视觉嵌入 ----
+            # 投影视觉嵌入到 d_model
+            visual_e = self.visual_proj(character_visual_embeddings) # (B, NumChars, D)
+
+            visual_injection = torch.zeros_like(x)
+            id_injection = torch.zeros_like(x)
+
+            # 获取 characters 在序列中的原始索引
+            char_indices = element_indices[is_char] 
+            batch_indices = torch.arange(B, device=x.device).unsqueeze(1).expand(-1, S)[is_char]
+
+            # 为每个 character token 选择对应的视觉嵌入
+            
+            # 调试：char_indices越界了
+            selected_visuals = visual_e[batch_indices.long(), char_indices.long()]
+            selected_ids = id_e[is_char]
+
+            # 将嵌入放置到序列的正确位置
+            visual_injection[is_char] = selected_visuals
+            id_injection[is_char] = selected_ids
+
+            # ---- 门控融合 ----
+            gate = torch.sigmoid(self.gate_proj(x))  # (B,S,D)
+            x = x + gate * id_injection + (1.0 - gate) * visual_injection
+       
+        # 5. Add positional encoding
         if self.use_positional_encoding:
             x = x + self.pos_embed[:, :S, :]
             
-        # 5. Create padding mask and pass through Transformer blocks
+        # 6. Create padding mask and pass through Transformer blocks
         key_padding_mask = (element_types == self.layout_types['TYPE_PAD'])
         for blk in self.blocks:
             x = blk(x, key_padding_mask)
