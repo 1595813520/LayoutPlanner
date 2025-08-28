@@ -34,8 +34,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, default="planner.yaml")
     parser.add_argument("--save_dir", type=str, default="./checkpoints")
-    parser.add_argument("--epochs", type=int, default=100, help="")
-    parser.add_argument("--batch_size", type=int, default=64, help="")
+    parser.add_argument("--max_train_steps", type=int, default=10000, help="")
+    parser.add_argument("--batch_size", type=int, default=32, help="")
     parser.add_argument("--resume_log_dir", type=str, default=None)
     parser.add_argument("--exp_name", type=str, default="")
     parser.add_argument("--seed", type=int, default=0, help="A seed for reproducible training.")
@@ -164,11 +164,12 @@ def main():
     step_in_epoch = 0
     running = 0.0
     
-    while global_step < config.max_train_steps:
+    while global_step < config.training.max_train_steps:
     # for epoch in range(1, epochs+1):
         planner.train()
         t0 = time.time()
-        for batch in enumerate(loader):
+        for i, batch in enumerate(loader):
+        # for batch in loader:
             # (可选) panel captions嵌入（批处理，padding已在collate_fn完成）
             captions_nested = batch["panel_captions"]
             flat_captions = [c for caps in captions_nested for c in caps]
@@ -298,8 +299,8 @@ def main():
                 if epoch_loss < best_loss:
                     best_loss = epoch_loss
                     accelerator.save({"model": planner.state_dict(), "global_step": global_step, "best_loss": best_loss}, os.path.join(save_dir, "planner_best.pt"))
-            if global_step >= config.max_train_steps:
-                break   # 达上限立即跳出
+            if global_step >= config.training.max_train_steps:
+                break  
 
         running = 0.0
         step_in_epoch = 0

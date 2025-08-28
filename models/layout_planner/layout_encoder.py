@@ -152,7 +152,7 @@ class TokenLayoutEncoder(nn.Module):
 
     def forward(self, element_types, element_indices, element_local_indices, parent_panel_indices, 
                 style_vector, aspect_ratios, panel_caption_embeddings=None, 
-                character_ids=None, character_visual_embeddings=None):
+                character_ids=None, character_visual_embeddings=None, dialog_speaker_ids=None):
         """
         element_types: (B,S) long
         element_indices: (B,S) long
@@ -179,7 +179,7 @@ class TokenLayoutEncoder(nn.Module):
         ar_e = self.aspect_ratio_mlp(aspect_ratios.unsqueeze(-1)).unsqueeze(1)
         x = x + (style_e + ar_e) * is_page # 将两种全局条件一起注入
         
-        # 3 Inject caption embeddings ONLY to PANEL tokens ---
+        # 3 注入 caption 到 PANEL tokens
         if panel_caption_embeddings is not None:
             is_panel = (element_types == self.layout_types['TYPE_PANEL']) # (B, S)
             
@@ -205,43 +205,50 @@ class TokenLayoutEncoder(nn.Module):
             # Add the caption embeddings to the base embeddings
             x = x + caption_injection
 
-        # 4: 注入 character 视觉嵌入
-        if character_visual_embeddings is not None:
-            is_char = (element_types == self.layout_types['TYPE_CHAR']) # (B, S)
-
-            # ---- 角色 ID 嵌入 ----
-            # character_ids: (B, S) long, 需在 collate_fn 中提供
-            char_ids = character_ids  # 假设作为 forward 额外参数传入
-            id_e = self.character_id_embed(torch.clamp(char_ids, 0, self.character_id_embed.num_embeddings - 1)).to(x.dtype)
-
-            # ---- 视觉嵌入 ----
-            # 投影视觉嵌入到 d_model
+        # 4. 注入 CHAR 视觉特征
+        if character_visual_embeddings is not None and character_ids is not None:
+            is_char = (element_types == self.layout_types['TYPE_CHAR'])
+            id_e = self.character_id_embed(
+                torch.clamp(character_ids, 0, self.character_id_embed.num_embeddings - 1)
+            ).to(x.dtype)
             visual_e = self.visual_proj(character_visual_embeddings).to(x.dtype) # (B, NumChars, D)
 
             visual_injection = torch.zeros_like(x, dtype=x.dtype, device=x.device)
             id_injection = torch.zeros_like(x, dtype=x.dtype, device=x.device)
 
-            # 获取 characters 在序列中的原始索引
-            char_indices = element_indices[is_char] 
+            char_indices = element_indices[is_char]
             batch_indices = torch.arange(B, device=x.device).unsqueeze(1).expand(-1, S)[is_char]
-
-            # 为每个 character token 选择对应的视觉嵌入
             selected_visuals = visual_e[batch_indices.long(), char_indices.long()]
             selected_ids = id_e[is_char]
 
-            # 将嵌入放置到序列的正确位置
             visual_injection[is_char] = selected_visuals
             id_injection[is_char] = selected_ids
 
-            # ---- 门控融合 ----
-            gate = torch.sigmoid(self.gate_proj(x)).to(x.dtype)  # (B,S,D)
+            gate = torch.sigmoid(self.gate_proj(x)).to(x.dtype)
             x = x + gate * id_injection + (1.0 - gate) * visual_injection
+
+        # 5. 注入 DIALOG 的说话人视觉特征
+        if dialog_speaker_ids is not None and character_visual_embeddings is not None:
+            is_dialog = (element_types == self.layout_types['TYPE_DIALOG'])
+            visual_e = self.visual_proj(character_visual_embeddings).to(x.dtype)  # (B, NumChars, D)
+            dialog_injection = torch.zeros_like(x, dtype=x.dtype, device=x.device)
+
+            # 遍历所有 dialog 位置，把对应说话人的 visual embedding 填进去
+            for b in range(B):
+                dialog_pos = torch.nonzero(is_dialog[b], as_tuple=False).squeeze(1)
+                for seq_idx in dialog_pos:
+                    sid = dialog_speaker_ids[b, seq_idx].item()  # 页内角色索引
+                    if sid >= 0 and sid < visual_e.shape[1]:
+                        dialog_injection[b, seq_idx] = visual_e[b, sid]
+
+            # 这里直接加到 x 上（也可以考虑门控融合）
+            x = x + dialog_injection
        
-        # 5. Add positional encoding
+        # 6. 位置编码
         if self.use_positional_encoding:
             x = x + self.pos_embed[:, :S, :].to(x.dtype)
             
-        # 6. Create padding mask and pass through Transformer blocks
+        # 7. Transformer 编码
         key_padding_mask = (element_types == self.layout_types['TYPE_PAD'])
         for blk in self.blocks:
             x = blk(x, key_padding_mask)

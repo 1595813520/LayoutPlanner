@@ -34,7 +34,8 @@ class LayoutPlanner(nn.Module):
             aspect_ratios=batch["aspect_ratios"],   
             panel_caption_embeddings=batch["panel_caption_embeddings"],
             character_ids=batch["character_ids"],
-            character_visual_embeddings=batch["character_visual_embeddings"]
+            character_visual_embeddings=batch["character_visual_embeddings"],
+            dialog_speaker_ids=batch["dialog_speaker_ids"] 
         )
         seq_feats = enc_outputs["seq_feats"]  # (B, S, D)
 

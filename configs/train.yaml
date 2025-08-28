@@ -24,7 +24,7 @@ model:
     max_dialogs: 8
     
 data:
-  annotation_path: "DiffSensei-main/checkpoints/mangazero/annotations_3200_5.json"
+  annotation_path: "DiffSensei-main/checkpoints/mangazero/annotations_mask_5.json"
   image_dir: "DiffSensei-main/checkpoints/mangazero/images"
 
 dataset:
@@ -49,6 +49,8 @@ training:
   gradient_accumulation_steps: 1
   mixed_precision: "fp16"
   seed: 42
+  max_train_steps: 100000
+
 
 
 resampler:

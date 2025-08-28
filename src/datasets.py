@@ -304,6 +304,7 @@ def collate_fn(batch: List[Dict[str, Any]], config: Dict[str, Any]) -> Dict[str,
     dialog_shapes  = []
     dialog_breakout_labels = []
     dialog_breakout_ratios = []
+    dialog_speaker_ids = []
     character_bboxes    = []
     character_ids = []
     character_breakout_labels = []
@@ -347,6 +348,7 @@ def collate_fn(batch: List[Dict[str, Any]], config: Dict[str, Any]) -> Dict[str,
         panels, dialogs, chars = [], [], []
         pcaps, pbxs, poffs, pcls = [], [], [], []
         
+        
         for pi, p in enumerate(frames):
             # Panel token    
             panels.append({"panel_idx": pi, "frame": p})
@@ -382,6 +384,7 @@ def collate_fn(batch: List[Dict[str, Any]], config: Dict[str, Any]) -> Dict[str,
         # dialog/char
         dbxs, dlabels, dratios, dshapes = [], [], [], []
         cbxs, clabels, cratios, char_ids = [], [], [], []
+        dialog_speakers = []
         
         for j, d in enumerate(dialogs):
             # et.append(TYPE_DIALOG); ei.append(j); parent_idx.append(d["panel_idx"])
@@ -398,6 +401,10 @@ def collate_fn(batch: List[Dict[str, Any]], config: Dict[str, Any]) -> Dict[str,
             dratios.append(br)
             dlabels.append(1 if br > 1e-6 else 0)
             dshapes.append(shape_map_dialog.get(dg.get("bubble_type", None), 0))
+            # 取 speaker_id，如果缺失设为 -1
+            speaker_id = dg.get("speaker_id", None)
+            dialog_speakers.append(-1 if speaker_id is None else int(speaker_id))
+            
         for k, c in enumerate(chars):
             # et.append(TYPE_CHAR); ei.append(k); parent_idx.append(c["panel_idx"])
             et.append(TYPE_CHAR); ei.append(k); parent_idx.append(c["panel_idx"]); elocal_idx.append(c["local_idx"])
@@ -430,6 +437,7 @@ def collate_fn(batch: List[Dict[str, Any]], config: Dict[str, Any]) -> Dict[str,
         dialog_shapes.append(pad_to_max_tensor_int(dshapes, max_dialogs, pad_val=0))
         dialog_breakout_labels.append(pad_to_max_tensor_int(dlabels, max_dialogs, pad_val=0))
         dialog_breakout_ratios.append(pad_to_max_tensor_scalar(dratios, max_dialogs, pad_val=0.0))
+        dialog_speaker_ids.append(pad_to_max_tensor_int(dialog_speakers, max_dialogs, pad_val=-1))
 
         character_bboxes.append(pad_to_max_tensor_box(cbxs, max_chars, pad_val=0))
         character_ids.append(pad_to_max_tensor_int(char_ids, max_chars, pad_val=-1))
@@ -478,20 +486,32 @@ def collate_fn(batch: List[Dict[str, Any]], config: Dict[str, Any]) -> Dict[str,
     dialog_shapes = torch.stack(dialog_shapes).long()      # [B, max_dialogs]
     dialog_breakout_labels = torch.stack(dialog_breakout_labels).long()
     dialog_breakout_ratios = torch.stack(dialog_breakout_ratios)
+    dialog_speaker_ids = torch.stack(dialog_speaker_ids).long()  # [B, max_dialogs]
     character_bboxes = torch.stack(character_bboxes)      # [B, max_chars, 4]
     character_ids = torch.stack(character_ids).long()      # [B, max_chars]
     character_breakout_labels = torch.stack(character_breakout_labels).long()
     character_breakout_ratios = torch.stack(character_breakout_ratios)
     
-    # 填充到全长S序列的character_ids
+    # 填充到全长S序列的character_ids/dialog_speaker_ids
     B, S = element_types.shape
-    character_ids_fullseq = torch.zeros((B, S), dtype=torch.long)
+    # character_ids_fullseq
+    character_ids_fullseq = torch.full((B, S), -1, dtype=torch.long)
     for b in range(B):
         char_positions = torch.nonzero(element_types[b] == TYPE_CHAR, as_tuple=False).squeeze(-1)
         num_fill = min(len(char_positions), character_ids[b].shape[0])
         if num_fill > 0:
             character_ids_fullseq[b, char_positions[:num_fill]] = character_ids[b][:num_fill].long()
     character_ids = character_ids_fullseq
+
+    # dialog_speaker_ids_fullseq
+    dialog_speaker_ids_fullseq = torch.full((B, S), -1, dtype=torch.long)
+    for b in range(B):
+        dialog_positions = torch.nonzero(element_types[b] == TYPE_DIALOG, as_tuple=False).squeeze(-1)
+        num_fill = min(len(dialog_positions), dialog_speaker_ids[b].shape[0])
+        if num_fill > 0:
+            dialog_speaker_ids_fullseq[b, dialog_positions[:num_fill]] = dialog_speaker_ids[b][:num_fill].long()
+    character_ids = character_ids_fullseq
+    dialog_speaker_ids = dialog_speaker_ids_fullseq
     
     # 父索引
     dialog_parent_idx = torch.full((bs, max_dialogs), -1, dtype=torch.long)
@@ -540,6 +560,7 @@ def collate_fn(batch: List[Dict[str, Any]], config: Dict[str, Any]) -> Dict[str,
         "dialog_shapes": dialog_shapes,
         "dialog_breakout_labels": dialog_breakout_labels,
         "dialog_breakout_ratios": dialog_breakout_ratios,
+        "dialog_speaker_ids": dialog_speaker_ids,
         "character_ids": character_ids,
         "character_bboxes": character_bboxes,
         "character_breakout_labels": character_breakout_labels,
