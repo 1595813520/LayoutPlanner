@@ -313,16 +313,7 @@ def collate_fn(batch: List[Dict[str, Any]], config: Dict[str, Any]) -> Dict[str,
     ip_images = []
     magi_ip_images = []
     ip_exists = []
-    ip_char_ids = []
-
-    
-    print("Sample frame count:", len(frames))
-    print("Sum dialogs", sum(len(f.get('dialogs', [])) for f in frames))
-    print("Sum chars", sum(len(f.get('characters', [])) for f in frames))
-    print("panel_counts", [len(ann['frames']) for ann in batch])
-    print("dialog_counts", [sum(len(f.get('dialogs', [])) for f in ann['frames']) for ann in batch])
-    print("char_counts", [sum(len(f.get('characters', [])) for f in ann['frames']) for ann in batch])
-            
+    ip_char_ids = []    
               
     for ann in batch:
         W, H = ann["width"], ann["height"]
@@ -356,7 +347,6 @@ def collate_fn(batch: List[Dict[str, Any]], config: Dict[str, Any]) -> Dict[str,
         panels, dialogs, chars = [], [], []
         pcaps, pbxs, poffs, pcls = [], [], [], []
         
-  
         for pi, p in enumerate(frames):
             # Panel token    
             panels.append({"panel_idx": pi, "frame": p})

@@ -14,15 +14,11 @@ from src.utils import load_ckpt, mean_multiple_ip_embeds
 from models.layout_planner.planner import LayoutPlanner
 from models.layout_planner.resampler import Resampler
 from src.losses import LayoutCompositeLoss
-
-def seed_everything(seed: int = 42):
-    import random, numpy as np
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
+from accelerate import Accelerator
+from accelerate.logging import get_logger
+from accelerate.utils import set_seed
     
-def apply_style_cfg_dropout(style_vectors, p):
+def apply_style_cfg_dropout(style_vectors, p, device):
     """
     style_vectors: Tensor (B,4)
     p: dropout prob (0..1)
@@ -30,7 +26,6 @@ def apply_style_cfg_dropout(style_vectors, p):
     """
     if p <= 0.0:
         return style_vectors
-    device = style_vectors.device
     B = style_vectors.shape[0]
     mask = (torch.rand(B, device=device) >= p).float().unsqueeze(-1)  # 1 means keep, 0 means drop
     return style_vectors * mask
@@ -43,32 +38,32 @@ def main():
     parser.add_argument("--batch_size", type=int, default=64, help="")
     parser.add_argument("--resume_log_dir", type=str, default=None)
     parser.add_argument("--exp_name", type=str, default="")
+    parser.add_argument("--seed", type=int, default=0, help="A seed for reproducible training.")
     args = parser.parse_args()
     config = OmegaConf.load(args.config)
     args_dict = {k: v for k, v in vars(args).items() if v is not None}
     args_conf = OmegaConf.create(args_dict)
     config = OmegaConf.merge(config, args_conf)
     
-    seed_everything(42)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    accelerator = Accelerator(
+        gradient_accumulation_steps=config.training.gradient_accumulation_steps,
+        mixed_precision=config.training.mixed_precision,
+    )
+    set_seed(config.training.seed)
     
     # 加载文本编码器和分词器
     tokenizer = CLIPTokenizer.from_pretrained(config.model.pretrained_model_path, subfolder="tokenizer")
     text_encoder = CLIPTextModel.from_pretrained(config.model.pretrained_model_path, subfolder="text_encoder")
     tokenizer_2 = CLIPTokenizer.from_pretrained(config.model.pretrained_model_path, subfolder="tokenizer_2")
     text_encoder_2 = CLIPTextModelWithProjection.from_pretrained(config.model.pretrained_model_path, subfolder="text_encoder_2")
-    text_encoder.to(device)
-    text_encoder_2.to(device)
     text_encoder.requires_grad_(False)
     text_encoder_2.requires_grad_(False)
     
     image_encoder_path = config.model.image_encoder_path
     image_encoder = CLIPVisionModelWithProjection.from_pretrained(image_encoder_path)
-    image_encoder.to(device)
     image_encoder.requires_grad_(False)
     if config.model.magi_image_encoder_path is not None:
         magi_image_encoder = AutoModel.from_pretrained(config.model.magi_image_encoder_path, trust_remote_code=True).crop_embedding_model
-        magi_image_encoder.to(device)
         magi_image_encoder.requires_grad_(False)
     else:
         magi_image_encoder = None
@@ -87,7 +82,7 @@ def main():
         ff_mult=config.resampler.ff_mult,
         magi_embedding_dim=magi_image_encoder.config.hidden_size if magi_image_encoder is not None else None
         # use_magi=config.model.magi_image_encoder_path is not None
-    ).to(device)
+    )
     
     if config.model.image_proj_model is not None:
         load_ckpt(image_proj_model, config.model.image_proj_model)
@@ -108,9 +103,9 @@ def main():
         dataset,
         batch_size=config.dataset.batch_size,
         shuffle=config.dataset.shuffle,
-        num_workers=config.dataset.num_workers,
+        num_workers=config.dataset.num_workers * accelerator.num_processes,
         collate_fn=lambda b: collate_fn(b, config),
-        pin_memory=True,
+        # pin_memory=True,
     )
     
     planner = LayoutPlanner(
@@ -130,38 +125,56 @@ def main():
             "num_dialog_shapes": len(config.bubble_shapes),  # 不预测 bubble shape
             "layout_types": config.layout_types
         }
-    ).to(device)
+    )
     
     # loss & optimizer
     criterion = LayoutCompositeLoss(
         lambda_style=config.training.lambda_style,
         lambda_geom=config.training.lambda_geom
-    ).to(device)
+    )
+    
+    weight_dtype = torch.float32
+    if accelerator.mixed_precision == "fp16":
+        weight_dtype = torch.float16
+    elif accelerator.mixed_precision == "bf16":
+        weight_dtype = torch.bfloat16
+    text_encoder.to(accelerator.device, dtype=weight_dtype)
+    text_encoder_2.to(accelerator.device, dtype=weight_dtype)
+    image_encoder.to(accelerator.device, dtype=weight_dtype)
+    if magi_image_encoder is not None:
+        magi_image_encoder.to(accelerator.device, dtype=weight_dtype)
     
     lr = float(config.training.lr)
     weight_decay = float(config.training.weight_decay)
     optimizer = torch.optim.AdamW(planner.parameters(), lr=lr, weight_decay=weight_decay)
+    
+    # Prepare everything with accelerator
+    text_encoder, text_encoder_2, image_encoder, magi_image_encoder, image_proj_model, planner, criterion, optimizer, loader = accelerator.prepare(
+        text_encoder, text_encoder_2, image_encoder, magi_image_encoder, image_proj_model, planner, criterion, optimizer, loader
+    )
+    
     style_dropout_p = float(config.training.style_cfg_dropout)
-    epochs = int(config.training.epochs)
+    # epochs = int(config.training.epochs)
     save_dir = config.training.save_dir
-    os.makedirs(save_dir, exist_ok=True)
+    if accelerator.is_main_process:
+        os.makedirs(save_dir, exist_ok=True)
     clip_grad = float(config.training.clip_grad_norm)
     best_loss = float("inf")
     global_step = 0
+    step_in_epoch = 0
+    running = 0.0
     
-    for epoch in range(1, epochs+1):
+    while global_step < config.max_train_steps:
+    # for epoch in range(1, epochs+1):
         planner.train()
-        running = 0.0
         t0 = time.time()
-        for it, batch in enumerate(loader):
-            # ==== 1. 直接用collate_fn的输出，无需再二次单条处理 ====
-            # 自动to(device)
-            batch = {k: (v.to(device) if isinstance(v, torch.Tensor) else v) for k, v in batch.items()}
+        for batch in enumerate(loader):
             # (可选) panel captions嵌入（批处理，padding已在collate_fn完成）
             captions_nested = batch["panel_captions"]
             flat_captions = [c for caps in captions_nested for c in caps]
             if flat_captions:
-                inputs = tokenizer(flat_captions, padding=True, truncation=True, return_tensors="pt").to(device)
+                inputs = tokenizer(flat_captions, padding=True, truncation=True, return_tensors="pt")
+                inputs = {k: v.to(accelerator.device) for k, v in inputs.items()}
                 with torch.no_grad():
                     emb = text_encoder(**inputs).last_hidden_state[:, 0, :]
                 per_sample_embeds = []
@@ -171,17 +184,17 @@ def main():
                     if n > 0:
                         per_sample_embeds.append(emb[idx:idx+n])
                     else:
-                        per_sample_embeds.append(torch.zeros((0, emb.shape[-1]), device=device))
+                        per_sample_embeds.append(torch.zeros((0, emb.shape[-1]), device=accelerator.device))
                     idx += n
             else:
-                per_sample_embeds = [torch.zeros((0, text_encoder.config.hidden_size), device=device) for _ in captions_nested]
+                per_sample_embeds = [torch.zeros((0, text_encoder.config.hidden_size), device=accelerator.device) for _ in captions_nested]
             # 按 config 固定长度 pad 到 max_panels
             max_panels = config.dataset.max_panels
             D = text_encoder.config.hidden_size
             padded_embeds = []
             for e in per_sample_embeds:
                 if e.shape[0] < max_panels:
-                    pad = torch.zeros((max_panels - e.shape[0], D), device=device)
+                    pad = torch.zeros((max_panels - e.shape[0], D), device=accelerator.device)
                     e = torch.cat([e, pad], dim=0)
                 elif e.shape[0] > max_panels:
                     e = e[:max_panels]
@@ -189,7 +202,7 @@ def main():
             batch["panel_caption_embeddings"] = torch.stack(padded_embeds, dim=0)
             
             # ==== 2. style cfg dropout ====
-            batch["style_vector"] = apply_style_cfg_dropout(batch["style_vector"], style_dropout_p)
+            batch["style_vector"] = apply_style_cfg_dropout(batch["style_vector"], style_dropout_p, accelerator.device)
             
             # ==== 3. Encode image features + Resampler =====
             B = batch["ip_images"].shape[0]
@@ -201,7 +214,7 @@ def main():
                 ip_images_flat = batch["ip_images"].view(B * N_ips * N_src, *batch["ip_images"].shape[2:])
                 
                 # ——改用 last_hidden_state！——
-                outputs = image_encoder(ip_images_flat.to(device), output_hidden_states=False, return_dict=True)
+                outputs = image_encoder(ip_images_flat.to(accelerator.device), output_hidden_states=False, return_dict=True)
                 image_embeds_raw = outputs.last_hidden_state  # [16, 257, 1280]
                 
                 # reshape为 [B, N_ips, N_src, seq_len, D_img]
@@ -214,10 +227,10 @@ def main():
                 # 处理 MAGI 部分同理
                 if magi_image_encoder is not None:
                     magi_images_flat = batch["magi_ip_images"].view(B * N_ips * N_src, *batch["magi_ip_images"].shape[2:])
-                    magi_hidden = magi_image_encoder(magi_images_flat.to(device, dtype=torch.float32)).last_hidden_state
+                    magi_hidden = magi_image_encoder(magi_images_flat.to(accelerator.device, dtype=weight_dtype)).last_hidden_state
                     magi_embeds = magi_hidden[:, 0]
                     magi_embeds = magi_embeds.view(B, N_ips, N_src, -1).transpose(1, 2)
-                    magi_image_embeds = magi_embeds.contiguous().view(B * N_src, N_ips, -1).to(dtype=torch.float32)
+                    magi_image_embeds = magi_embeds.contiguous().view(B * N_src, N_ips, -1).to(dtype=weight_dtype)
                 else:
                     magi_image_embeds = None
 
@@ -235,42 +248,65 @@ def main():
             # 对齐角色ID，得到(B, max_characters, D)的完整visual特征
             max_characters = character_ids.shape[1]
             D = character_visual_embeddings_sampled.shape[-1]
-            device = character_visual_embeddings_sampled.device
-            character_visual_embeddings = torch.zeros(B, max_characters, D, device=device)
+            character_visual_embeddings = torch.zeros(B, max_characters, D, device=accelerator.device)
 
+            # real_ids = ip_char_ids[b][:N_ips].tolist()
             for b in range(B):
+                real_n = character_visual_embeddings_sampled.shape[1] if character_visual_embeddings_sampled.ndim == 3 else character_visual_embeddings_sampled[b].shape[0]
+                # 有的实现N_ips可落在维度1，有的在dim0
+                valid_ids = ip_char_ids[b][:real_n]  # 严格只看有embedding的id
                 for t in range(max_characters):
                     token_id = character_ids[b, t].item()
-                    # id可能为pad(-1或0)，需统一处理；这里用-1和ip_char_ids里pad一致
-                    if token_id > 0 and token_id in ip_char_ids[b]:
-                        idx = (ip_char_ids[b] == token_id).nonzero(as_tuple=False)[0].item()  # 第一个匹配
-                        character_visual_embeddings[b, t] = character_visual_embeddings_sampled[b, idx]
+                    if token_id > 0 and token_id in valid_ids:
+                        idxs = (valid_ids == token_id).nonzero(as_tuple=False)
+                        if idxs.numel() > 0:
+                            idx = idxs[0].item()
+                            if idx < real_n:
+                                character_visual_embeddings[b, t] = character_visual_embeddings_sampled[b, idx]
                     # else 保持全零
             batch["character_visual_embeddings"] = character_visual_embeddings
             
             # ==== 4. 前向、loss、step ====
-            outputs = planner(batch)  # list of per-sample outputs
-            loss, logs = criterion(outputs, batch)
-            optimizer.zero_grad(set_to_none=True)
-            loss.backward()
-            if clip_grad is not None:
-                torch.nn.utils.clip_grad_norm_(planner.parameters(), clip_grad)
+            with accelerator.accumulate(planner):
+                with accelerator.autocast():
+                    outputs = planner(batch)  # list of per-sample outputs
+                    loss, logs = criterion(outputs, batch)
+                accelerator.backward(loss)
+                
+            synced_loss = accelerator.gather(loss).mean()
+            running += synced_loss.item()
+
+            if clip_grad is not None and clip_grad > 0:
+                accelerator.clip_grad_norm_(planner.parameters(), clip_grad)
+                
             optimizer.step()
-            running += float(loss.item())
+            optimizer.zero_grad(set_to_none=True)
             global_step += 1
-            if (it + 1) % 200 == 0:
-                avg = running / (it + 1)
-                print(f"[Epoch {epoch} | iter {it+1}/{len(loader)}] avg_loss={avg:.4f} geom={logs['geom_loss']:.4f}  pred={logs['pred_loss']:.4f} style={logs['style_loss']:.4f}")
-        epoch_loss = running / max(1, len(loader))
-        print(f"Epoch {epoch} done in {time.time()-t0:.1f}s | loss={epoch_loss:.4f}")
-        # save
-        ckpt = os.path.join(save_dir, f"planner_epoch{epoch}.pt")
-        torch.save({"model": planner.state_dict(), "epoch": epoch}, ckpt)
-        if epoch_loss < best_loss:
-            best_loss = epoch_loss
-            torch.save({"model": planner.state_dict(), "epoch": epoch}, os.path.join(save_dir, "planner_best.pt"))
-    print("Training finished.")
-    print(f"Best model saved to {os.path.join(save_dir, 'planner_best.pt')}")
+            step_in_epoch += 1
+            
+            if accelerator.is_main_process and (global_step % 100 == 0):
+                avg = running / max(1, step_in_epoch)
+                print(f"[global_step {global_step}] avg_loss={avg:.4f} geom={logs['geom_loss']:.4f}  pred={logs['pred_loss']:.4f} style={logs['style_loss']:.4f}")
+
+            # 按一定步数保存模型
+            if accelerator.is_main_process and (global_step % config.training.save_interval == 0):
+                epoch_loss = running / max(1, step_in_epoch)
+                print(f"[global_step {global_step}] done in {time.time()-t0:.1f}s | loss={epoch_loss:.4f}")
+
+                ckpt = os.path.join(save_dir, f"planner_step{global_step}.pt")
+                accelerator.save({"model": planner.state_dict(), "global_step": global_step, "optimizer": optimizer.state_dict()}, ckpt)
+                if epoch_loss < best_loss:
+                    best_loss = epoch_loss
+                    accelerator.save({"model": planner.state_dict(), "global_step": global_step, "best_loss": best_loss}, os.path.join(save_dir, "planner_best.pt"))
+            if global_step >= config.max_train_steps:
+                break   # 达上限立即跳出
+
+        running = 0.0
+        step_in_epoch = 0
+    
+    if accelerator.is_main_process:
+        print("Training finished.")
+        print(f"Best model saved to {os.path.join(save_dir, 'planner_step{global_step}.pt')}")
     
 if __name__ == "__main__":
     main()

@@ -18,7 +18,7 @@ model:
     dropout: 0.05
   vision:
     num_ips: 6           # 角色最大数，采样用
-    num_ip_sources: 2    # 每角色采样图片数
+    num_ip_sources: 1    # 每角色采样图片数
     num_vision_tokens: 16
     num_dummy_tokens: 16
     max_dialogs: 8
@@ -32,8 +32,8 @@ dataset:
   max_panels: 30
   max_dialogs: 30
   max_characters: 30
-  num_workers: 8
-  batch_size: 64
+  num_workers: 4
+  batch_size: 32
   shuffle: true
 
 training:
@@ -44,8 +44,12 @@ training:
   lambda_style: 30.0
   lambda_geom: 30.0
   style_cfg_dropout: 0.1
-  save_every: 100
+  save_interval: 10000
   save_dir: "./checkpoints"
+  gradient_accumulation_steps: 1
+  mixed_precision: "fp16"
+  seed: 42
+
 
 resampler:
   dim: 1280

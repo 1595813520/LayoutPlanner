@@ -184,10 +184,10 @@ class TokenLayoutEncoder(nn.Module):
             is_panel = (element_types == self.layout_types['TYPE_PANEL']) # (B, S)
             
             # Project caption embeddings to d_model
-            caption_e = self.caption_proj(panel_caption_embeddings) # (B, NumPanels, D)
+            caption_e = self.caption_proj(panel_caption_embeddings).to(x.dtype) # (B, NumPanels, D)
             
             # Create a zero tensor to "scatter" the caption embeddings into
-            caption_injection = torch.zeros_like(x)
+            caption_injection = torch.zeros_like(x, dtype=x.dtype, device=x.device)
             
             # Get the indices of the panels within their own group (0, 1, 2...)
             panel_indices = element_indices[is_panel] 
@@ -212,22 +212,20 @@ class TokenLayoutEncoder(nn.Module):
             # ---- 角色 ID 嵌入 ----
             # character_ids: (B, S) long, 需在 collate_fn 中提供
             char_ids = character_ids  # 假设作为 forward 额外参数传入
-            id_e = self.character_id_embed(torch.clamp(char_ids, 0, self.character_id_embed.num_embeddings - 1))
+            id_e = self.character_id_embed(torch.clamp(char_ids, 0, self.character_id_embed.num_embeddings - 1)).to(x.dtype)
 
             # ---- 视觉嵌入 ----
             # 投影视觉嵌入到 d_model
-            visual_e = self.visual_proj(character_visual_embeddings) # (B, NumChars, D)
+            visual_e = self.visual_proj(character_visual_embeddings).to(x.dtype) # (B, NumChars, D)
 
-            visual_injection = torch.zeros_like(x)
-            id_injection = torch.zeros_like(x)
+            visual_injection = torch.zeros_like(x, dtype=x.dtype, device=x.device)
+            id_injection = torch.zeros_like(x, dtype=x.dtype, device=x.device)
 
             # 获取 characters 在序列中的原始索引
             char_indices = element_indices[is_char] 
             batch_indices = torch.arange(B, device=x.device).unsqueeze(1).expand(-1, S)[is_char]
 
             # 为每个 character token 选择对应的视觉嵌入
-            
-            # 调试：char_indices越界了
             selected_visuals = visual_e[batch_indices.long(), char_indices.long()]
             selected_ids = id_e[is_char]
 
@@ -236,12 +234,12 @@ class TokenLayoutEncoder(nn.Module):
             id_injection[is_char] = selected_ids
 
             # ---- 门控融合 ----
-            gate = torch.sigmoid(self.gate_proj(x))  # (B,S,D)
+            gate = torch.sigmoid(self.gate_proj(x)).to(x.dtype)  # (B,S,D)
             x = x + gate * id_injection + (1.0 - gate) * visual_injection
        
         # 5. Add positional encoding
         if self.use_positional_encoding:
-            x = x + self.pos_embed[:, :S, :]
+            x = x + self.pos_embed[:, :S, :].to(x.dtype)
             
         # 6. Create padding mask and pass through Transformer blocks
         key_padding_mask = (element_types == self.layout_types['TYPE_PAD'])
