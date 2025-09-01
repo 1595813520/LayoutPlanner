@@ -10,14 +10,15 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from transformers import CLIPTokenizer, CLIPTextModel, CLIPVisionModelWithProjection, AutoModel, CLIPTextModelWithProjection
 from src.datasets import MangaLayoutDataset, collate_fn
-from src.utils import load_ckpt, mean_multiple_ip_embeds
+from src.utils import load_ckpt, mean_multiple_ip_embeds, load_planner_ckpt
 from models.layout_planner.planner import LayoutPlanner
 from models.layout_planner.resampler import Resampler
 from src.losses import LayoutCompositeLoss
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import set_seed
-    
+from accelerate import DistributedDataParallelKwargs
+from torch.utils.tensorboard import SummaryWriter
 def apply_style_cfg_dropout(style_vectors, p, device):
     """
     style_vectors: Tensor (B,4)
@@ -32,25 +33,45 @@ def apply_style_cfg_dropout(style_vectors, p, device):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", type=str, default="planner.yaml")
+    parser.add_argument("--config", type=str, default="train.yaml")
     parser.add_argument("--save_dir", type=str, default="./checkpoints")
-    parser.add_argument("--max_train_steps", type=int, default=10000, help="")
+    parser.add_argument("--max_train_steps", type=int, default=100000, help="")
     parser.add_argument("--batch_size", type=int, default=32, help="")
-    parser.add_argument("--resume_log_dir", type=str, default=None)
-    parser.add_argument("--exp_name", type=str, default="")
+    parser.add_argument("--resume_log_dir", type=str, default=None, help="Log dir to resume training from (must contain config.yaml and checkpoints).")
     parser.add_argument("--seed", type=int, default=0, help="A seed for reproducible training.")
     args = parser.parse_args()
     config = OmegaConf.load(args.config)
     args_dict = {k: v for k, v in vars(args).items() if v is not None}
     args_conf = OmegaConf.create(args_dict)
     config = OmegaConf.merge(config, args_conf)
-    
+    set_seed(config.training.seed)
+    # ---- 自动选择 find_unused_parameters ----
+    find_unused_params = False  # 默认关闭以提高性能
+    ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=find_unused_params)
     accelerator = Accelerator(
         gradient_accumulation_steps=config.training.gradient_accumulation_steps,
         mixed_precision=config.training.mixed_precision,
+        kwargs_handlers=[ddp_kwargs]
     )
-    set_seed(config.training.seed)
-    
+
+    # ---- 日志设置 ----
+    # 1. 确定 log_dir
+    if args.resume_log_dir is not None:
+        log_dir = args.resume_log_dir
+    else:
+        log_dir = os.path.join(config.training.save_dir, "logs", datetime.now().strftime("%Y-%m%d-%H:%M"))
+
+    # 2. 只有主进程负责创建和保存配置
+    if accelerator.is_main_process:
+        os.makedirs(log_dir, exist_ok=True)
+        OmegaConf.save(config, os.path.join(log_dir, "config.yaml"))
+        writer = SummaryWriter(log_dir=log_dir)
+    else:
+        writer = None
+
+    # 3. 同步所有进程，保证 log_dir 可用
+    accelerator.wait_for_everyone()
+
     # 加载文本编码器和分词器
     tokenizer = CLIPTokenizer.from_pretrained(config.model.pretrained_model_path, subfolder="tokenizer")
     text_encoder = CLIPTextModel.from_pretrained(config.model.pretrained_model_path, subfolder="text_encoder")
@@ -67,7 +88,6 @@ def main():
         magi_image_encoder.requires_grad_(False)
     else:
         magi_image_encoder = None
-    
     
     # Init adapter modules
     image_proj_model = Resampler(
@@ -86,6 +106,7 @@ def main():
     
     if config.model.image_proj_model is not None:
         load_ckpt(image_proj_model, config.model.image_proj_model)
+        image_proj_model.requires_grad_(False)
         
     # Dataset & Loader
     dataset = MangaLayoutDataset(
@@ -104,10 +125,16 @@ def main():
         batch_size=config.dataset.batch_size,
         shuffle=config.dataset.shuffle,
         num_workers=config.dataset.num_workers * accelerator.num_processes,
-        collate_fn=lambda b: collate_fn(b, config),
-        # pin_memory=True,
+        # collate_fn=lambda b: collate_fn(b, config, device=accelerator.device), # 修改 collate 直接放 GPU
+        collate_fn=lambda b: collate_fn(b, config), 
+        pin_memory=True,
+        persistent_workers=True
     )
     
+    # for i, batch in enumerate(loader):
+    #     for k,v in batch.items():
+    #         if torch.is_tensor(v):
+    #             batch[k] = v.to(accelerator.device, non_blocking=True)
     planner = LayoutPlanner(
         encoder_cfg={
             "max_elements": config.dataset.max_elements,
@@ -132,7 +159,7 @@ def main():
         lambda_style=config.training.lambda_style,
         lambda_geom=config.training.lambda_geom
     )
-    
+        
     weight_dtype = torch.float32
     if accelerator.mixed_precision == "fp16":
         weight_dtype = torch.float16
@@ -141,6 +168,7 @@ def main():
     text_encoder.to(accelerator.device, dtype=weight_dtype)
     text_encoder_2.to(accelerator.device, dtype=weight_dtype)
     image_encoder.to(accelerator.device, dtype=weight_dtype)
+    image_proj_model.to(accelerator.device, dtype=weight_dtype)
     if magi_image_encoder is not None:
         magi_image_encoder.to(accelerator.device, dtype=weight_dtype)
     
@@ -148,9 +176,9 @@ def main():
     weight_decay = float(config.training.weight_decay)
     optimizer = torch.optim.AdamW(planner.parameters(), lr=lr, weight_decay=weight_decay)
     
-    # Prepare everything with accelerator
-    text_encoder, text_encoder_2, image_encoder, magi_image_encoder, image_proj_model, planner, criterion, optimizer, loader = accelerator.prepare(
-        text_encoder, text_encoder_2, image_encoder, magi_image_encoder, image_proj_model, planner, criterion, optimizer, loader
+    # Prepare everything with accelerator    
+    planner, criterion, optimizer, loader = accelerator.prepare(
+        planner, criterion, optimizer, loader
     )
     
     style_dropout_p = float(config.training.style_cfg_dropout)
@@ -160,9 +188,18 @@ def main():
         os.makedirs(save_dir, exist_ok=True)
     clip_grad = float(config.training.clip_grad_norm)
     best_loss = float("inf")
-    global_step = 0
     step_in_epoch = 0
     running = 0.0
+    
+    if args.resume_log_dir is not None:
+        ckpt_files = [f for f in os.listdir(log_dir) if f.startswith("planner_step") and f.endswith(".pt")]
+        if not ckpt_files:
+            raise FileNotFoundError(f"No checkpoint found in {log_dir}")
+        last_ckpt_file = sorted(ckpt_files, key=lambda x: int(x.split("planner_step")[1].split(".")[0]))[-1]
+        ckpt_path = os.path.join(log_dir, last_ckpt_file)
+        global_step = load_planner_ckpt(planner, optimizer, ckpt_path, map_location=accelerator.device)
+    else:
+        global_step = 0
     
     while global_step < config.training.max_train_steps:
     # for epoch in range(1, epochs+1):
@@ -277,9 +314,9 @@ def main():
             synced_loss = accelerator.gather(loss).mean()
             running += synced_loss.item()
 
-            if clip_grad is not None and clip_grad > 0:
-                accelerator.clip_grad_norm_(planner.parameters(), clip_grad)
-                
+            if clip_grad is not None and global_step % config.training.grad_clip_interval == 0:
+                accelerator.clip_grad_norm_(planner.parameters(), config.training.clip_grad_norm)
+
             optimizer.step()
             optimizer.zero_grad(set_to_none=True)
             global_step += 1
@@ -289,16 +326,34 @@ def main():
                 avg = running / max(1, step_in_epoch)
                 print(f"[global_step {global_step}] avg_loss={avg:.4f} geom={logs['geom_loss']:.4f}  pred={logs['pred_loss']:.4f} style={logs['style_loss']:.4f}")
 
+            # ---- TensorBoard logging ----
+            log_interval = int(config.training.log_interval)
+            if accelerator.is_main_process and global_step % log_interval == 0:
+                avg_loss = running / log_interval
+                writer.add_scalar("Loss/total", avg_loss, global_step)
+                writer.add_scalar("Loss/pred", logs["pred_loss"], global_step)
+                writer.add_scalar("Loss/geom", logs["geom_loss"], global_step)
+                writer.add_scalar("Loss/style", logs["style_loss"], global_step)
+            
+            save_interval = int(config.training.save_interval)
             # 按一定步数保存模型
-            if accelerator.is_main_process and (global_step % config.training.save_interval == 0):
+            if accelerator.is_main_process and (global_step % save_interval == 0):
                 epoch_loss = running / max(1, step_in_epoch)
                 print(f"[global_step {global_step}] done in {time.time()-t0:.1f}s | loss={epoch_loss:.4f}")
-
                 ckpt = os.path.join(save_dir, f"planner_step{global_step}.pt")
-                accelerator.save({"model": planner.state_dict(), "global_step": global_step, "optimizer": optimizer.state_dict()}, ckpt)
+                accelerator.save({
+                    "model": accelerator.get_state_dict(planner),  # 兼容 DDP
+                    "optimizer": optimizer.state_dict(),
+                    "global_step": global_step
+                }, ckpt)
+                print(f"model saved to {ckpt}")
                 if epoch_loss < best_loss:
                     best_loss = epoch_loss
-                    accelerator.save({"model": planner.state_dict(), "global_step": global_step, "best_loss": best_loss}, os.path.join(save_dir, "planner_best.pt"))
+                    accelerator.save({
+                        "model": accelerator.get_state_dict(planner),
+                        "global_step": global_step,
+                        "best_loss": best_loss
+                    }, os.path.join(save_dir, "planner_best.pt"))
             if global_step >= config.training.max_train_steps:
                 break  
 

@@ -20,15 +20,24 @@ def image_transform(pil_image):
 def _norm_xyxy(b, W, H):
     # 归一化到[0,1]
     x1, y1, x2, y2 = b
-    return [x1/W, y1/H, x2/W, y2/H]
+    if x2 < x1:  # swap or clamp
+        x2 = x1 + 1e-6
+    if y2 < y1:
+        y2 = y1 + 1e-6
+    return [
+        max(0.0, min(1.0, x1 / W)),
+        max(0.0, min(1.0, y1 / H)),
+        max(0.0, min(1.0, x2 / W)),
+        max(0.0, min(1.0, y2 / H)),
+    ]
 
 def _xyxy_to_cxcywh(xyxy):
     # (x1,y1,x2,y2) -> (cx,cy,w,h)
     x1, y1, x2, y2 = xyxy
     cx = (x1 + x2) / 2.0
     cy = (y1 + y2) / 2.0
-    w  = (x2 - x1)
-    h  = (y2 - y1)
+    w = max(1e-6, x2 - x1)
+    h = max(1e-6, y2 - y1)
     return [cx, cy, w, h]
 
 # 以 bbox 作为基准，计算 four_points 相对于 bbox 的偏移量
@@ -41,7 +50,18 @@ def _offsets_from_four_points(four_points, bbox, W, H):
     for (px, py), (bx, by) in zip(four_points, base):
         offs += [(px - bx)/scale, (py - by)/scale]
     return offs
-
+'''
+有几种类型需要 pad：
+固定列数的二维数据
+例：panel_bboxes（max_panels, 4）、offsets（max_panels, 8）、角色 bbox、对话框 bbox 等
+⇒ 应该用类似 pad_to_max_tensor_box() 一样的接口，强制 target_dim
+一维数据
+例：分类 id 列表、mask 序列等
+⇒ 可以用 pad_to_max_tensor_int() / pad_to_max_tensor_scalar() 这样的接口
+纯 token 序列
+例：element_types、element_indices
+⇒ 可以用原来的 pad_to_max_tensor()，但只处理一维
+'''
 def pad_to_max_tensor(tensor, max_len, pad_val=0.0, target_dim=None):
     arr = torch.as_tensor(tensor)
     if arr.numel() == 0:
@@ -64,25 +84,56 @@ def pad_to_max_tensor(tensor, max_len, pad_val=0.0, target_dim=None):
     else:
         raise ValueError(f"Unexpected tensor ndim: {arr.shape}")
     
-def pad_to_max_tensor_box(tensor: list, max_len: int, pad_val: float = 0.0, target_dim: int=4):
+def pad_to_max_tensor_offset(tensor, max_len, pad_val=0.0):
     """
-    用于对话框、角色框等pad到[max_len, target_dim]。如果输入list为空，自动补0行。
+    把形如 [8] 或 [[8 floats], ...] 的 offset 数据 pad 到 [max_len, 8]
     """
-    arr = torch.as_tensor(tensor)
-    if arr.numel() == 0:  # 空
-        return torch.full((max_len, target_dim), pad_val, dtype=torch.float32)
+    arr = torch.as_tensor(tensor, dtype=torch.float32)
+    if arr.numel() == 0:
+        return torch.full((max_len, 8), pad_val, dtype=torch.float32)
+    
     if arr.ndim == 1:
-        if arr.shape[0] == target_dim:
-            arr = arr.unsqueeze(0)  # 单个框 如 [x,y,w,h]
-        else:
-            # 只有一个数（理论异常），pad到[target_dim]
-            arr = torch.cat([arr, torch.full((target_dim-arr.shape[0],), pad_val, dtype=arr.dtype)])
-            arr = arr.unsqueeze(0)
+        if arr.shape[0] != 8:
+            raise ValueError(f"Offset vector must have length 8, got {arr.shape[0]}")
+        arr = arr.unsqueeze(0)  # 变成 [1, 8]
+        
+    if arr.ndim == 2 and arr.shape[1] != 8:
+        raise ValueError(f"Expected offsets shape (*, 8), got {arr.shape}")
+    
     n = arr.shape[0]
-    d = arr.shape[1]
     if n >= max_len:
         return arr[:max_len]
-    pad = torch.full((max_len - n, d), pad_val, dtype=arr.dtype)
+    
+    pad = torch.full((max_len - n, 8), pad_val, dtype=torch.float32)
+    return torch.cat([arr, pad], dim=0)
+
+def pad_to_max_tensor_box(tensor, max_len, pad_val: float = 0.0, target_dim: int = 4, dtype=torch.float32):
+    """
+    用于panel/dialog/character bbox等，pad到[max_len, target_dim]，始终返回float32。
+    """
+    arr = torch.as_tensor(tensor, dtype=dtype)
+    if arr.numel() == 0:
+        return torch.full((max_len, target_dim), pad_val, dtype=dtype)
+
+    # 一维情况
+    if arr.ndim == 1:
+        if arr.shape[0] == target_dim:
+            arr = arr.unsqueeze(0)  # 单个框
+        else:
+            # 长度不对，补齐到target_dim
+            diff = target_dim - arr.shape[0]
+            if diff > 0:
+                arr = torch.cat([arr, torch.full((diff,), pad_val, dtype=dtype)])
+            arr = arr.unsqueeze(0)
+
+    # 二维但列数不对
+    if arr.ndim == 2 and arr.shape[1] != target_dim:
+        raise ValueError(f"pad_to_max_tensor_box: expected dim[1]={target_dim}, got {arr.shape[1]}")
+
+    n = arr.shape[0]
+    if n >= max_len:
+        return arr[:max_len]
+    pad = torch.full((max_len - n, target_dim), pad_val, dtype=dtype)
     return torch.cat([arr, pad], dim=0)
 
 def pad_to_max_tensor_scalar(tensor: list, max_len: int, pad_val: float = 0.0):
@@ -168,6 +219,7 @@ class MangaLayoutDataset(Dataset):
         """
         page级采集所有panel的所有角色，融合一组，每角色最多max_num_ip_sources张
         输出: ip_images (max_num_ips*max_num_ip_sources, 3, 224, 224) 和配套mask
+        返回 PIL.Image 列表，不做 tensor 转换
         """
         characters = []
         for frame in ann.get('frames', []):
@@ -204,11 +256,15 @@ class MangaLayoutDataset(Dataset):
             ip_images.append(Image.new("RGB", (224,224), (0,0,0)))
             ip_exists.append(0)
             ip_char_ids.append(0)
-        clip_ip_images = self.clip_image_processor(images=ip_images, return_tensors="pt").pixel_values
-        magi_ip_images = self.magi_image_processor(images=ip_images, return_tensors="pt").pixel_values
-        ip_exists_tensor = torch.tensor(ip_exists, dtype=torch.float32)
-        ip_char_ids_tensor = torch.tensor(ip_char_ids, dtype=torch.long)
-        return clip_ip_images, magi_ip_images, ip_exists_tensor, ip_char_ids_tensor
+        
+        # clip_ip_images = self.clip_image_processor(images=ip_images, return_tensors="pt").pixel_values
+        # magi_ip_images = self.magi_image_processor(images=ip_images, return_tensors="pt").pixel_values
+        # ip_exists_tensor = torch.tensor(ip_exists, dtype=torch.float32)
+        # ip_char_ids_tensor = torch.tensor(ip_char_ids, dtype=torch.long)
+        # return clip_ip_images, magi_ip_images, ip_exists_tensor, ip_char_ids_tensor
+    
+        return ip_images, ip_exists, ip_char_ids
+    
 
     def __getitem__(self, idx):
         ann = self.samples[idx]
@@ -235,7 +291,8 @@ class MangaLayoutDataset(Dataset):
             }
             out_panels.append(panel)
         # 在page级采集ip_images/ip_exists
-        ip_images, magi_ip_images, ip_exists, ip_char_ids = self._sample_ip_images_page(ann)
+        # ip_images, magi_ip_images, ip_exists, ip_char_ids = self._sample_ip_images_page(ann)
+        ip_images, ip_exists, ip_char_ids = self._sample_ip_images_page(ann)
         
         # Tokenize caption
         # if random.random() < self.t_drop_rate:
@@ -268,10 +325,11 @@ class MangaLayoutDataset(Dataset):
             "frames": out_panels,
             # "text_input_ids": text_input_ids,
             # "text_input_ids_2": text_input_ids_2,
-            "ip_images": ip_images,   # (max_num_ips*max_num_ip_sources, 3, 224, 224)
-            "magi_ip_images": magi_ip_images,
-            "ip_exists": ip_exists,   # (max_num_ips*max_num_ip_sources,)
-            "ip_char_ids": ip_char_ids,    # 新增
+            # "ip_images": ip_images,   # (max_num_ips*max_num_ip_sources, 3, 224, 224)
+            # "magi_ip_images": magi_ip_images,
+            "ip_images_pil": ip_images,    # 延迟转换
+            "ip_exists": torch.tensor(ip_exists, dtype=torch.float32),
+            "ip_char_ids": torch.tensor(ip_char_ids, dtype=torch.long)
         }
 
 def collate_fn(batch: List[Dict[str, Any]], config: Dict[str, Any]) -> Dict[str, Any]:
@@ -315,6 +373,13 @@ def collate_fn(batch: List[Dict[str, Any]], config: Dict[str, Any]) -> Dict[str,
     magi_ip_images = []
     ip_exists = []
     ip_char_ids = []    
+    
+    clip_processor = CLIPImageProcessor()
+    magi_processor = ViTImageProcessor()
+
+    ip_images_tensor = []
+    magi_ip_images_tensor = []
+
               
     for ann in batch:
         W, H = ann["width"], ann["height"]
@@ -322,22 +387,46 @@ def collate_fn(batch: List[Dict[str, Any]], config: Dict[str, Any]) -> Dict[str,
         height.append(H)
         style_vecs.append(ann['style_vector'])
         frames = ann.get("frames", [])
-        ip_images.append(ann["ip_images"])
-        magi_ip_images.append(ann["magi_ip_images"])
-        ip_exists.append(ann["ip_exists"])
+        # ip_images.append(ann["ip_images"])
+        # magi_ip_images.append(ann["magi_ip_images"])
+        # ip_exists.append(ann["ip_exists"])
         
-    
-        # 新增ip_char_ids: 保证长度为 num_ips*num_ip_sources（需和上面pad一致，否则np.pad左对齐/追加-1或0至指定shape）
+        clip_imgs = clip_processor(images=ann["ip_images_pil"], return_tensors="pt").pixel_values
+        magi_imgs = magi_processor(images=ann["ip_images_pil"], return_tensors="pt").pixel_values
+
+        ip_images_tensor.append(clip_imgs)
+        magi_ip_images_tensor.append(magi_imgs)
+        # ip_exists.append(ann["ip_exists"])
+        # ip_char_ids.append(ann["ip_char_ids"])
+        
+        # 直接使用 Dataset 给的 Tensor
         id_arr = ann["ip_char_ids"]
-        # 保证长度一致pad
-        if len(id_arr) < config.model.vision.num_ips * config.model.vision.num_ip_sources:
-            padded = torch.cat([
-                id_arr,
-                torch.full((config.model.vision.num_ips * config.model.vision.num_ip_sources - len(id_arr),), 0, dtype=torch.long)
-            ])
-            ip_char_ids.append(padded)
+        if id_arr.numel() < max_num_ips * max_num_ip_sources:
+            pad_len = max_num_ips * max_num_ip_sources - id_arr.numel()
+            id_arr = torch.cat([id_arr, torch.zeros(pad_len, dtype=torch.long)])
         else:
-            ip_char_ids.append(id_arr[:config.model.vision.num_ips * config.model.vision.num_ip_sources])
+            id_arr = id_arr[: max_num_ips * max_num_ip_sources]
+        ip_char_ids.append(id_arr)
+
+        ip_exists_arr = ann["ip_exists"]
+        if ip_exists_arr.numel() < max_num_ips * max_num_ip_sources:
+            pad_len = max_num_ips * max_num_ip_sources - ip_exists_arr.numel()
+            ip_exists_arr = torch.cat([ip_exists_arr, torch.zeros(pad_len, dtype=torch.float32)])
+        else:
+            ip_exists_arr = ip_exists_arr[: max_num_ips * max_num_ip_sources]
+        ip_exists.append(ip_exists_arr)
+    
+        # # 新增ip_char_ids: 保证长度为 num_ips*num_ip_sources（需和上面pad一致，否则np.pad左对齐/追加-1或0至指定shape）
+        # id_arr = ann["ip_char_ids"]
+        # # 保证长度一致pad
+        # if len(id_arr) < config.model.vision.num_ips * config.model.vision.num_ip_sources:
+        #     padded = torch.cat([
+        #         id_arr,
+        #         torch.full((config.model.vision.num_ips * config.model.vision.num_ip_sources - len(id_arr),), 0, dtype=torch.long)
+        #     ])
+        #     ip_char_ids.append(padded)
+        # else:
+        #     ip_char_ids.append(id_arr[:config.model.vision.num_ips * config.model.vision.num_ip_sources])
             
         # token序列展平（同前，只panel属性/对话/角色展开）
         # et, ei, parent_idx = [TYPE_PAGE],[0],[-1]
@@ -367,7 +456,8 @@ def collate_fn(batch: List[Dict[str, Any]], config: Dict[str, Any]) -> Dict[str,
             # 以 four_points 作为基准，计算 classification_points 相对于 four_points 的偏移量。偏移量已经提前计算，但也可以不提前计算
             # poff = p.get("offsets") if p.get("offsets") else _offsets_from_four_points(class_bbox, four, W, H)
             poff = p["offsets"] if "offsets" in p else [0.0] * 8
-            poffs.append(poff)
+            poff_norm = [dx / max(W,H) for dx in poff]  # 归一化！！！！！！！！！！！！！！！
+            poffs.append(poff_norm)
             pcls.append(shape_map.get(p.get("shape_type", "panel_rect"), 0))
             pcaps.append(p.get("caption", ""))
             
@@ -479,9 +569,9 @@ def collate_fn(batch: List[Dict[str, Any]], config: Dict[str, Any]) -> Dict[str,
         for b in batch
     ])
     
-    panel_bboxes = torch.stack([pad_to_max_tensor(pb, max_panels) for pb in panel_bboxes])
-    panel_offsets= torch.stack([pad_to_max_tensor(po, max_panels) for po in panel_offsets])
-    panel_classes= torch.stack([pad_to_max_tensor(pc, max_panels, pad_val=-1) for pc in panel_classes])
+    panel_bboxes = torch.stack([pad_to_max_tensor_box(pb, max_panels) for pb in panel_bboxes])
+    panel_offsets= torch.stack([pad_to_max_tensor_offset(po, max_panels) for po in panel_offsets])
+    panel_classes= torch.stack([pad_to_max_tensor_int(pc, max_panels, pad_val=-1) for pc in panel_classes])
     dialog_bboxes = torch.stack(dialog_bboxes)            # [B, max_dialogs, 4]
     dialog_shapes = torch.stack(dialog_shapes).long()      # [B, max_dialogs]
     dialog_breakout_labels = torch.stack(dialog_breakout_labels).long()
@@ -531,13 +621,15 @@ def collate_fn(batch: List[Dict[str, Any]], config: Dict[str, Any]) -> Dict[str,
     height = torch.tensor(height, dtype=torch.int64)
     aspect_ratios = torch.tensor([float(w)/float(h) for w, h in zip(width, height)], dtype=torch.float32)
     # page级ip图片组装成(B, max_num_ips*max_num_ip_sources, 3, 224, 224)?
-    ip_images = torch.stack(ip_images, dim=0)
-    magi_ip_images = torch.stack(magi_ip_images, dim=0)  # shape 同 ip_images
+    # ip_images = torch.stack(ip_images, dim=0)
+    # magi_ip_images = torch.stack(magi_ip_images, dim=0)  # shape 同 ip_images
+    ip_images_tensor = torch.stack(ip_images_tensor, dim=0)
+    magi_ip_images_tensor = torch.stack(magi_ip_images_tensor, dim=0)
     # ip_exists = torch.stack(ip_exists, dim=0)
     ip_exists = torch.stack(ip_exists, dim=0).view(bs, max_num_ips, max_num_ip_sources)  # 三维
     ip_char_ids = torch.stack(ip_char_ids, dim=0).view(bs, max_num_ips * max_num_ip_sources)   # 不分source时可(B, max_num_ips)
 
-    return {
+    batch_dict = {
         "width": width,
         "height": height,
         "aspect_ratios": aspect_ratios,
@@ -550,12 +642,10 @@ def collate_fn(batch: List[Dict[str, Any]], config: Dict[str, Any]) -> Dict[str,
         "panel_bboxes": panel_bboxes,
         "panel_offsets": panel_offsets,
         "panel_classes": panel_classes,
-        "ip_images": ip_images,        # ★ DiffSensei主流page级视觉参考 (B, N, 3, 224, 224)
-        "magi_ip_images": magi_ip_images, 
-        "ip_exists": ip_exists,        # ★ page级mask (B, N)
-        "ip_char_ids": ip_char_ids,   # ★ page级角色id (B, N)
-        # "text_input_ids": text_input_ids,
-        # "text_input_ids_2": text_input_ids_2,
+        "ip_images": ip_images_tensor,
+        "magi_ip_images": magi_ip_images_tensor,
+        "ip_exists": ip_exists,
+        "ip_char_ids": ip_char_ids,
         "dialog_bboxes": dialog_bboxes,
         "dialog_shapes": dialog_shapes,
         "dialog_breakout_labels": dialog_breakout_labels,
@@ -574,3 +664,11 @@ def collate_fn(batch: List[Dict[str, Any]], config: Dict[str, Any]) -> Dict[str,
         "dialog_parent_idx": dialog_parent_idx,
         "char_parent_idx": char_parent_idx,
     }
+
+    # ===== 额外增加: 如果指定了device，则把所有tensor搬到GPU =====
+    # if device is not None:
+    #     for k, v in batch_dict.items():
+    #         if torch.is_tensor(v):
+    #             batch_dict[k] = v.to(device, non_blocking=True)
+
+    return batch_dict

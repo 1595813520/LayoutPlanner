@@ -19,7 +19,7 @@ def get_generator(seed, device):
     return generator
 
 def load_ckpt(image_proj_model, ckpt_path):
-    checkpoint = torch.load(ckpt_path, map_location='cpu')
+    checkpoint = torch.load(ckpt_path, map_location='cpu', weights_only=True)
     
     if 'image_proj' in checkpoint:
         state_dict = checkpoint['image_proj']
@@ -27,7 +27,28 @@ def load_ckpt(image_proj_model, ckpt_path):
         state_dict = checkpoint
     # 处理多卡module前缀
     new_state = {k.replace("module.", ""): v for k, v in state_dict.items()}
-    image_proj_model.load_state_dict(new_state, strict=True)
+    
+    
+    # 新增：打印模型参数名和检查点参数名，对比是否匹配
+    print("=== 模型中的参数名 ===")
+    model_keys = set(image_proj_model.state_dict().keys())
+    for k in sorted(model_keys):
+        print(k)
+    
+    print("\n=== 检查点中的参数名 ===")
+    ckpt_keys = set(new_state.keys())
+    for k in sorted(ckpt_keys):
+        print(k)
+    
+    # 新增：检查缺失/多余的参数
+    missing_keys = model_keys - ckpt_keys
+    unexpected_keys = ckpt_keys - model_keys
+    if missing_keys:
+        print(f"\n❌ 模型缺失参数：{missing_keys}")
+    if unexpected_keys:
+        print(f"\n❌ 检查点多余参数：{unexpected_keys}")
+        
+    image_proj_model.load_state_dict(new_state, strict=True, assign=True)
     
     # image_proj_ckpt = {}
 
@@ -39,6 +60,28 @@ def load_ckpt(image_proj_model, ckpt_path):
     # del checkpoint['image_proj']
 
     # image_proj_model.load_state_dict(image_proj_ckpt, strict=True)
+    
+def load_planner_ckpt(model, optimizer, ckpt_path, map_location="cpu"):
+    """
+    加载 planner 模型和 optimizer，同时恢复 global_step。
+    返回 global_step。
+    """
+    checkpoint = torch.load(ckpt_path, map_location=map_location, weights_only=True)
+    
+    state_dict = checkpoint.get('model', checkpoint)
+    # new_state = {k.replace("module.", ""): v for k, v in state_dict.items()}
+    new_state = {f"module.{k}": v for k, v in state_dict.items()}
+    model.load_state_dict(new_state, strict=True, assign=True)
+    print(f"[Load] planner model loaded from {ckpt_path}")
+
+    if optimizer is not None and 'optimizer' in checkpoint:
+        optimizer.load_state_dict(checkpoint['optimizer'])
+        print("[Load] optimizer state restored.")
+
+    global_step = checkpoint.get('global_step', 0)
+    print(f"[Load] resume from global_step = {global_step}")
+    return global_step
+
 def mean_multiple_ip_embeds(image_embeds, ip_exists, config, bsz):
     """
     image_embeds: [bsz * num_ip_sources, num_dummy_tokens + num_ips * num_vision_tokens, cross_attn_dim]

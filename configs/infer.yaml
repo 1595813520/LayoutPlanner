@@ -1,12 +1,11 @@
-# DiffSensei-main/layout-generator/configs/train.yaml
+# DiffSensei-main/layout-generator/configs/infer.yaml
 model:
   type: .layout_encoder.TokenLayoutEncoder  
   image_proj_model: "DiffSensei-main/checkpoints/diffsensei/image_generator/image_proj_model/pytorch_model.bin"
   pretrained_model_path: "model/stable-diffusion-xl-base-1.0"
   image_encoder_path: "IP-Adapter/models/image_encoder"
-  # image_encoder_path: "DiffSensei-main/checkpoints/diffsensei/image_generator/clip_image_encoder"
-  # magi_image_encoder_path: "DiffSensei-main/checkpoints/diffsensei/image_generator/magi_image_encoder"
-  magi_image_encoder_path: "DiffSensei-main/checkpoints/magi" 
+  magi_image_encoder_path: "DiffSensei-main/checkpoints/magi"
+  planner_path: "/data/checkpoints/planner_step5000.pt"
   encoder:
     d_model:  512              # 256
     num_layers: 8              # 6
@@ -15,13 +14,14 @@ model:
     use_final_ln: true
     dropout: 0.05
   vision:
-    num_ips: 9           # 角色最大数，采样用
+    num_ips: 6           # 角色最大数，采样用
     num_ip_sources: 1    # 每角色采样图片数
     num_vision_tokens: 16
     num_dummy_tokens: 16
+    max_dialogs: 8
     
 data:
-  annotation_path: "DiffSensei-main/checkpoints/mangazero/annotations_mask_5.json"
+  annotation_path: "/data/DiffSensei-main/layout-generator/checkpoints/f_annotations_style.json"
   image_dir: "DiffSensei-main/checkpoints/mangazero/images"
 
 dataset:
@@ -33,30 +33,13 @@ dataset:
   batch_size: 64
   shuffle: true
 
-training:
-  epochs: 100
-  lr: 1e-4
-  weight_decay: 0.01
-  clip_grad_norm: 1.0
-  grad_clip_interval: 10  # 每多少 step 裁剪一次梯度
-  log_interval: 10        # 每多少 step 记录一次到 TB
-  lambda_style: 100.0
-  lambda_geom: 100.0
-  style_cfg_dropout: 0.05
-  save_interval: 1000
-  save_dir: "/data/DiffSensei-main/layout-generator/checkpoints/0901"
-  gradient_accumulation_steps: 1
-  mixed_precision: "fp16"
-  seed: 42
-  max_train_steps: 100000
-
 resampler:
   dim: 1280
   depth: 4
   dim_head: 64
   heads: 20
   ff_mult: 4
-  cross_attention_dim: 2048    # 新增，与预训练resampler权重一致
+  cross_attention_dim: 2048  
   
 layout_types:
   TYPE_PAD: 0

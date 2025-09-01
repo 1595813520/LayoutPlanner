@@ -1,332 +1,194 @@
-# infer_real.py
-import os
-import json
-import yaml
-import torch
-from PIL import Image, ImageDraw, ImageFont
-from pathlib import Path
-from transformers import CLIPTokenizer, CLIPTextModel
-from models.layout_planner.planner import LayoutPlanner
+import os, json, torch
+from omegaconf import OmegaConf
+from PIL import Image, ImageDraw
+from transformers import CLIPImageProcessor, ViTImageProcessor
+from src.pipeline_planner import load_models, build_element_sequence
+from src.utils import mean_multiple_ip_embeds
 
-# ---- helper utils ----
-def load_cfg(path):
-    with open(path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
-
-def build_element_sequence(num_panels, num_dialogs, num_chars, layout_types):
-    """
-    Build element_types, element_indices, parent_panel_indices like collate.single_collate_fn does.
-    We set parent_panel_indices for dialogs/chars to -1 by default.
-    """
-    TYPE_PAGE = layout_types["TYPE_PAGE"]
-    TYPE_PANEL = layout_types["TYPE_PANEL"]
-    TYPE_DIALOG = layout_types["TYPE_DIALOG"]
-    TYPE_CHAR = layout_types["TYPE_CHAR"]
-
-    element_types = [TYPE_PAGE]
-    element_indices = [0]
-    parent_panel_indices = [-1]
-
-    # panels
-    for i in range(num_panels):
-        element_types.append(TYPE_PANEL)
-        element_indices.append(i)
-        parent_panel_indices.append(-1)
-
-    # dialogs
-    for j in range(num_dialogs):
-        element_types.append(TYPE_DIALOG)
-        element_indices.append(j)
-        parent_panel_indices.append(-1)  # unknown parent -> -1
-
-    # chars
-    for k in range(num_chars):
-        element_types.append(TYPE_CHAR)
-        element_indices.append(k)
-        parent_panel_indices.append(-1)
-
-    return element_types, element_indices, parent_panel_indices
+def clip_box(xyxy, W, H):
+    """将坐标裁剪到画布范围"""
+    return [max(0, min(W, xyxy[0])),
+            max(0, min(H, xyxy[1])),
+            max(0, min(W, xyxy[2])),
+            max(0, min(H, xyxy[3]))]
 
 def cxywh_to_xyxy_pixels(cxywh, W, H):
-    # cxywh: tensor or list [cx,cy,w,h] normalized (cx relative to W, cy relative to H, w relative to W, h relative to H)
-    cx, cy, w, h = cxywh
+    """从归一化cxywh恢复到像素坐标"""
+    cx, cy, w, h = [max(0.0, min(1.0, float(v))) for v in cxywh]  # clamp到[0,1]
     x1 = (cx - w/2.0) * W
     y1 = (cy - h/2.0) * H
     x2 = (cx + w/2.0) * W
     y2 = (cy + h/2.0) * H
-    return [float(x1), float(y1), float(x2), float(y2)]
+    return clip_box([x1, y1, x2, y2], W, H)
 
 def offsets_to_four_points(base_xyxy, offsets, W, H):
-    """
-    base_xyxy: [x1,y1,x2,y2] in pixels for this panel
-    offsets: length-8 tensor/list [dx1,dy1,dx2,dy2,...] where dx/dy are normalized by scale=max(W,H)
-    returns: list of 4 points [[x1,y1],[x2,y2],[x3,y3],[x4,y4]] in pixels (float)
-    base order is same as collate: [ (x1,y1),(x2,y1),(x2,y2),(x1,y2) ]
-    """
-    if len(offsets) < 8:
-        # fallback: return base rectangle corners
-        x1,y1,x2,y2 = base_xyxy
-        return [[x1,y1],[x2,y1],[x2,y2],[x1,y2]]
     scale = float(max(W, H))
-    x1,y1,x2,y2 = base_xyxy
+    x1, y1, x2, y2 = base_xyxy
     bases = [[x1,y1],[x2,y1],[x2,y2],[x1,y2]]
     pts = []
-    for i in range(4):
-        bx, by = bases[i]
+    for i, (bx, by) in enumerate(bases):
         dx = float(offsets[2*i]) * scale
         dy = float(offsets[2*i+1]) * scale
         pts.append([bx + dx, by + dy])
     return pts
 
-def tensor_to_list(t):
-    if t is None:
-        return []
-    if isinstance(t, torch.Tensor):
-        return t.detach().cpu().tolist()
-    return list(t)
+def visualize_prediction(image_path, frames, save_path):
+    img = Image.open(image_path).convert("RGB")
+    draw = ImageDraw.Draw(img)
+    for f in frames:
+        draw.polygon([tuple(pt) for pt in f["four_points"]], outline="red", width=2)
+        for ch in f["characters"]:
+            draw.rectangle(ch["bbox"], outline="green", width=2)
+        for dg in f["dialogs"]:
+            draw.rectangle(dg["bbox"], outline="blue", width=2)
+    img.save(save_path)
+    print(f"🖼️ Visualization saved to {save_path}")
 
-# ---- main inference routine ----
-def infer_and_save(cfg_path, ckpt_path, test_json, image_dir, out_dir):
-    os.makedirs(out_dir, exist_ok=True)
-    cfg = load_cfg(cfg_path)
+def assign_to_panel(obj_bbox, panels):
+    ox = (obj_bbox[0] + obj_bbox[2]) / 2
+    oy = (obj_bbox[1] + obj_bbox[3]) / 2
+    for i, (px1, py1, px2, py2) in enumerate(panels):
+        if px1 <= ox <= px2 and py1 <= oy <= py2:
+            return i
+    return 0  # fallback
+
+def run_infer(cfg_path, ckpt_path, test_json, image_dir, output_dir):
+    cfg = OmegaConf.load(cfg_path)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
-    text_encoder_path = cfg["dataset"]["train"]["text_encoder_path"]
-    text_encoder = CLIPTextModel.from_pretrained(text_encoder_path).to(device)
-    tokenizer = CLIPTokenizer.from_pretrained(text_encoder_path)
-    text_encoder.eval()
+    os.makedirs(output_dir, exist_ok=True)
 
-    # read mappings
-    layout_types = cfg.get("layout_types", {"TYPE_PAD":0,"TYPE_PAGE":1,"TYPE_PANEL":2,"TYPE_CHAR":3,"TYPE_DIALOG":4})
-    panel_shapes_cfg = cfg.get("panel_shapes", {})
-    # build id->name map (panel_shapes: name -> {id: x})
-    id2panel = {v["id"]: k for k, v in panel_shapes_cfg.items()}
+    tokenizer, text_encoder, image_encoder, magi_image_encoder, resampler, planner = load_models(cfg, device)
+    planner.load_state_dict(torch.load(ckpt_path, map_location=device)["model"])
 
-    bubble_shapes_cfg = cfg.get("bubble_shapes", {})
-    id2bubble = {v["id"]: k for k, v in bubble_shapes_cfg.items()}
+    clip_proc = CLIPImageProcessor()
+    magi_proc = ViTImageProcessor()
 
-    # build model
-    model_params = cfg["model"]["parameters"]
-    max_panels = cfg["dataset"]["parameters"]["max_panels"]
-    
-    planner = LayoutPlanner(
-        encoder_cfg={**model_params, "layout_types": layout_types},
-        heads_cfg={
-            "num_panel_classes": len(panel_shapes_cfg),
-            "num_dialog_shapes": len(bubble_shapes_cfg),
-        }
-    ).to(device)
-
-    ck = torch.load(ckpt_path, map_location=device)
-    # ck may be saved as {"model": state_dict, "epoch": ...}
-    state = ck.get("model", ck)
-    planner.load_state_dict(state)
-    planner.eval()
-
-    # load test list
-    with open(test_json, "r", encoding="utf-8") as f:
-        test_list = json.load(f)
+    with open(test_json, "r") as f:
+        samples = json.load(f)
 
     results = []
-    for sample in test_list:
-        img_rel = sample["image_path"]
-        img_path = os.path.join(image_dir, img_rel) if not os.path.isabs(img_rel) else img_rel
-        W = sample.get("width", None)
-        H = sample.get("height", None)
-        if (W is None) or (H is None):
-            # try to load image to get size
-            with Image.open(img_path) as tmp:
-                W, H = tmp.size
+    for smp in samples:
+        npan, nch, ndlg = smp["num_panels"], smp["num_characters"], smp["num_dialogs"]
 
-        # build element sequence from requested counts (fallback to 3 panels if not provided)
-        num_panels = sample.get("num_panels", len(sample.get("frames", [])) if "frames" in sample else 3)
-        num_dialogs = sample.get("num_dialogs", 0)
-        num_chars = sample.get("num_characters", 0)
+        # 文本特征
+        caps = smp.get("panel_captions", [""] * npan)
+        if len(caps) < cfg.dataset.max_panels:
+            caps += [""] * (cfg.dataset.max_panels - len(caps))
+        inputs = tokenizer(caps, padding="max_length", truncation=True, max_length=77, return_tensors="pt").to(device)
+        txt_emb = text_encoder(**inputs).last_hidden_state[:, 0, :]
+        panel_caption_embeddings = txt_emb.unsqueeze(0)
 
-        etypes, eindices, pidxs = build_element_sequence(num_panels, num_dialogs, num_chars, layout_types)
+        # 视觉特征
+        N_ips = cfg.model.vision.num_ips
+        N_src = cfg.model.vision.num_ip_sources
+        B = 1
+        ip_images, ip_exists_mask, ip_char_ids = [], [], []
+        for cid in range(N_ips):
+            if cid < len(smp["characters"]):
+                img_path = os.path.join(image_dir, smp["characters"][cid]["ip_image_path"])
+                img_tensor = clip_proc(Image.open(img_path).convert("RGB"), return_tensors="pt")["pixel_values"].squeeze(0)
+                ip_images.append(img_tensor)
+                ip_exists_mask.append(1)
+                ip_char_ids.append(smp["characters"][cid]["id"])
+            else:
+                ip_images.append(torch.zeros((3,224,224)))
+                ip_exists_mask.append(0)
+                ip_char_ids.append(0)
 
-        # tensors (batch size 1)
-        etypes_t = torch.tensor([etypes], dtype=torch.long, device=device)
-        eind_t = torch.tensor([eindices], dtype=torch.long, device=device)
-        pidxs_t = torch.tensor([pidxs], dtype=torch.long, device=device)
+        ip_images_tensor = torch.stack(ip_images, dim=0).view(B, N_ips, 3, 224, 224)
+        ip_exists_tensor = torch.tensor(ip_exists_mask, dtype=torch.float32, device=device).view(B, N_ips, 1).expand(-1,-1,N_src)
+        ip_char_ids_tensor = torch.tensor(ip_char_ids, dtype=torch.long, device=device)
 
-        # style vector (B,4)
-        sp = sample.get("style_parameters", {})
-        style_vec = torch.tensor([[
-            float(sp.get("layout_density", 0.5)),
-            float(sp.get("alignment_score", 0.5)),
-            float(sp.get("shape_instability", 0.0)),
-            float(sp.get("breakout_intensity", 0.0)),
-        ]], dtype=torch.float32, device=device)
-        
-        if "panel_captions" in sample and isinstance(sample["panel_captions"], list):
-            panel_captions = sample["panel_captions"]
-        elif "frames" in sample:
-            panel_captions = [fr.get("caption", "") for fr in sample["frames"]]
+        # 展平视觉特征
+        ip_images_flat = ip_images_tensor.unsqueeze(2).expand(-1, -1, N_src, -1, -1, -1).reshape(B*N_ips*N_src, 3, 224, 224)
+        outputs_img = image_encoder(ip_images_flat.to(device))
+        image_embeds_raw = outputs_img.last_hidden_state.view(B, N_ips, N_src, outputs_img.last_hidden_state.shape[1], outputs_img.last_hidden_state.shape[2])
+        image_embeds_raw = image_embeds_raw.transpose(1,2).contiguous().view(B*N_src, N_ips, outputs_img.last_hidden_state.shape[1], outputs_img.last_hidden_state.shape[2])
+
+        if magi_image_encoder is not None:
+            magi_images_flat = ip_images_flat
+            magi_hidden = magi_image_encoder(magi_images_flat.to(device)).last_hidden_state
+            magi_embeds = magi_hidden[:,0].view(B, N_ips, N_src, -1).transpose(1,2).contiguous().view(B*N_src, N_ips, -1)
         else:
-            panel_captions = [""] * num_panels
+            magi_embeds = None
 
-        # pad 到 max_panels
-        if len(panel_captions) < max_panels:
-            panel_captions += [""] * (max_panels - len(panel_captions))
-        elif len(panel_captions) > max_panels:
-            panel_captions = panel_captions[:max_panels]
+        image_embeds_all = resampler(image_embeds_raw, magi_embeds)
+        image_embeds_final = mean_multiple_ip_embeds(image_embeds_all, ip_exists_tensor, cfg, B)
 
-        # text encode (B=1, max_panels, D)
-        inputs = tokenizer(panel_captions, padding=True, truncation=True, return_tensors="pt").to(device)
-        with torch.no_grad():
-            txt_emb = text_encoder(**inputs).last_hidden_state[:, 0, :]   # (max_panels, D)
-        panel_caption_embeddings = txt_emb.unsqueeze(0)  # (1, max_panels, D)
+        # 对齐到max_elements
+        max_elements = cfg.dataset.max_elements
+        TYPE_CHAR = cfg.layout_types.TYPE_CHAR
+        et, ei, pidx = build_element_sequence(npan, ndlg, nch, cfg.layout_types, max_elements)
+        char_positions = torch.nonzero(et[0] == TYPE_CHAR, as_tuple=False).squeeze(-1)
+        character_ids_full = torch.full((1, max_elements), -1, dtype=torch.long)
+        char_vis_full = torch.zeros((1, max_elements, image_embeds_final.shape[-1]))
+        num_fill = min(len(char_positions), len(ip_char_ids))
+        if num_fill > 0:
+            character_ids_full[0, char_positions[:num_fill]] = ip_char_ids_tensor[:num_fill].cpu()
+            char_vis_full[0, char_positions[:num_fill]] = image_embeds_final[0, :num_fill].cpu()
 
         batch = {
-            "element_types": etypes_t,
-            "element_indices": eind_t,
-            "parent_panel_indices": pidxs_t,
-            "style_vector": style_vec,
-            "panel_caption_embeddings": panel_caption_embeddings
+            "element_types": et, "element_indices": ei, "parent_panel_indices": pidx,
+            "element_local_indices": torch.full_like(et, -1),
+            "dialog_speaker_ids": torch.full_like(et, -1),
+            "style_vector": torch.tensor([list(smp["style_parameters"].values())], dtype=torch.float32),
+            "aspect_ratios": torch.tensor([smp["width"]/smp["height"]], dtype=torch.float32),
+            "panel_caption_embeddings": panel_caption_embeddings.cpu(),
+            "character_visual_embeddings": char_vis_full,
+            "character_ids": character_ids_full
         }
+        for k,v in batch.items():
+            if isinstance(v, torch.Tensor):
+                batch[k] = v.to(device)
 
-        
-        # forward
-        with torch.no_grad():
-            outputs = planner(batch)  # list of per-sample outputs
-            
-        p_out = {
-            "bbox": outputs["panel_bbox"][0],  # 新增：取第一个批次的数据
-            "offsets": outputs["panel_offsets"][0],  # 新增：取第一个批次的数据
-            "class_logits": outputs["panel_class_logits"][0]  # 新增：取第一个批次的数据
-        }
-        
-        # 对话框数据：取第一个批次的所有对话框
-        d_out = {
-            "bbox": outputs["dialog_bbox"][0],  # 新增：取第一个批次的数据
-            "breakout_ratio": outputs["dialog_breakout_ratio"][0],
-            "shape_logits": outputs["dialog_shape_logits"][0]
-        }
-        
-        # 角色数据：取第一个批次的所有角色
-        c_out = {
-            "bbox": outputs["character_bbox"][0],  # 新增：取第一个批次的数据
-            "breakout_ratio": outputs["character_breakout_ratio"][0]
-        }
+        # 推理
+        outputs = planner(batch)
+        id2panel = {v.id: k for k, v in cfg.panel_shapes.items()}
+        id2bubble = {v.id: k for k, v in cfg.bubble_shapes.items()}
 
-        # p_out, d_out, c_out = outputs[0]
+        # Panels
+        panel_bboxes_px, frames = [], []
+        for p in range(npan):
+            bbox_px = cxywh_to_xyxy_pixels(outputs["panel_bbox"][0][p].tolist(), smp["width"], smp["height"])
+            panel_bboxes_px.append(bbox_px)
+            offs = outputs["panel_offsets"][0][p].tolist()
+            four_pts = offsets_to_four_points(bbox_px, offs, smp["width"], smp["height"])
+            cls_id = torch.argmax(outputs["panel_class_logits"][0][p]).item()
+            frames.append({"bbox": bbox_px, "offsets": offs, "four_points": four_pts,
+                           "panel_class_name": id2panel.get(cls_id,"unknown"),
+                           "characters": [], "dialogs": []})
 
-        # panels
-        panel_bboxes = tensor_to_list(p_out.get("bbox"))          # (P,4) normalized cxywh
-        panel_offsets = tensor_to_list(p_out.get("offsets"))     # (P,8) raw
-        panel_class_logits = tensor_to_list(p_out.get("class_logits"))  # (P, num_classes)
+        # Characters
+        for idx_token, pos in enumerate(char_positions[:nch]):
+            cb = cxywh_to_xyxy_pixels(outputs["character_bbox"][0][idx_token].tolist(), smp["width"], smp["height"])
+            pid = assign_to_panel(cb, panel_bboxes_px)
+            br = outputs["character_breakout_ratio"][0][idx_token].item()
+            char_id_val = int(character_ids_full[0, pos].item())
+            frames[pid]["characters"].append({"id": char_id_val, "bbox": cb, "breakout_ratio": br})
 
-        panels = []
-        P = len(panel_bboxes)
-        for i in range(P):
-            cxywh = panel_bboxes[i]  # [cx,cy,w,h] normalized
-            base_xyxy = cxywh_to_xyxy_pixels(cxywh, W, H)
-            offs = panel_offsets[i] if i < len(panel_offsets) else [0.0]*8
-            four_pts = offsets_to_four_points(base_xyxy, offs, W, H)
-            cls_id = int(max(range(len(panel_class_logits[i])), key=lambda k: panel_class_logits[i][k])) if panel_class_logits and len(panel_class_logits)>i else None
-            panels.append({
-                "bbox_xyxy": base_xyxy,                # pixel x1,y1,x2,y2 (from bbox)
-                "cxywh_norm": panel_bboxes[i],
-                "offsets": offs,
-                "four_points": four_pts,
-                "panel_class_id": cls_id,
-                "panel_class_name": id2panel.get(cls_id, None)
-            })
+        # Dialogs
+        dlg_positions = torch.nonzero(et[0] == cfg.layout_types.TYPE_DIALOG, as_tuple=False).squeeze(-1)
+        for idx_token, pos in enumerate(dlg_positions[:ndlg]):
+            db = cxywh_to_xyxy_pixels(outputs["dialog_bbox"][0][idx_token].tolist(), smp["width"], smp["height"])
+            pid = assign_to_panel(db, panel_bboxes_px)
+            br = outputs["dialog_breakout_ratio"][0][idx_token].item()
+            shid = torch.argmax(outputs["dialog_shape_logits"][0][idx_token]).item()
+            frames[pid]["dialogs"].append({"bbox": db, "breakout_ratio": br, "shape_name": id2bubble.get(shid,"unknown"), "speaker_id": -1})
 
-        # dialogs
-        dialogs = []
-        if d_out is not None:
-            dbbox = tensor_to_list(d_out.get("bbox"))  # (D,4) cxywh normalized
-            dbreak = tensor_to_list(d_out.get("breakout_ratio"))  # (D,) or (D,1)
-            dshape_logits = tensor_to_list(d_out.get("shape_logits"))  # (D, n_shapes)
-            D = len(dbbox)
-            for i in range(D):
-                cxywh = dbbox[i]
-                xyxy = cxywh_to_xyxy_pixels(cxywh, W, H)
-                # 如果是 list of list 或 tensor (D,1)
-                val = dbreak[i]
-                if isinstance(val, (list, tuple)):
-                    val = val[0]  # 取第0个元素
-                br = float(val)
+        results.append({"image_path": smp["image_path"], "width": smp["width"], "height": smp["height"], "frames": frames})
 
-                shape_id = int(max(range(len(dshape_logits[i])), key=lambda k: dshape_logits[i][k])) if dshape_logits and len(dshape_logits)>i else None
-                dialogs.append({
-                    "bbox_xyxy": xyxy,
-                    "cxywh_norm": cxywh,
-                    "breakout_ratio": br,
-                    "shape_id": shape_id,
-                    "shape_name": id2bubble.get(shape_id, None)
-                })
+        # 可视化
+        visualize_prediction(os.path.join(image_dir, smp["image_path"]), frames, os.path.join(output_dir, f"vis_{os.path.basename(smp['image_path'])}"))
 
-        # characters
-        characters = []
-        if c_out is not None:
-            cbbox = tensor_to_list(c_out.get("bbox"))
-            cbr = tensor_to_list(c_out.get("breakout_ratio"))
-            C = len(cbbox)
-            for i in range(C):
-                cxywh = cbbox[i]
-                xyxy = cxywh_to_xyxy_pixels(cxywh, W, H)
-                val = cbr[i]
-                if isinstance(val, (list, tuple)):
-                    val = val[0]
-                br = float(val)
+    json.dump(results, open(os.path.join(output_dir, "inference_results.json"), "w", encoding="utf-8"), indent=2, ensure_ascii=False)
 
-                characters.append({
-                    "bbox_xyxy": xyxy,
-                    "cxywh_norm": cxywh,
-                    "breakout_ratio": br
-                })
-
-        result = {
-            "image_path": img_rel,
-            "width": W, "height": H,
-            "panels": panels,
-            "dialogs": dialogs,
-            "characters": characters
-        }
-        results.append(result)
-
-        # visualization
-        img = Image.open(img_path).convert("RGB")
-        draw = ImageDraw.Draw(img)
-        # panel polygons and bbox
-        for p in panels:
-            # polygon
-            poly = [tuple(map(float, pt)) for pt in p["four_points"]]
-            draw.polygon(poly, outline=(255,0,0))
-            # bbox rect
-            x1,y1,x2,y2 = p["bbox_xyxy"]
-            draw.rectangle([x1,y1,x2,y2], outline=(255,0,0), width=2)
-            if p["panel_class_name"]:
-                draw.text((x1+2, y1+2), str(p["panel_class_name"]), fill=(255,0,0))
-        # dialogs blue, chars green
-        for d in dialogs:
-            x1,y1,x2,y2 = d["bbox_xyxy"]
-            draw.rectangle([x1,y1,x2,y2], outline=(0,0,255), width=2)
-        for c in characters:
-            x1,y1,x2,y2 = c["bbox_xyxy"]
-            draw.rectangle([x1,y1,x2,y2], outline=(0,255,0), width=2)
-
-        out_vis = os.path.join(out_dir, f"vis_1{Path(img_rel).stem}.png")
-        img.save(out_vis)
-
-    # save results json
-    with open(os.path.join(out_dir, "inference_results.json"), "w", encoding="utf-8") as f:
-        json.dump(results, f, indent=2, ensure_ascii=False)
-
-    print("Done. Results saved to:", out_dir)
-
-
-# ---- run as script ----
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default="configs/planner.yaml")
-    parser.add_argument("--checkpoint", required=True, help="path to planner_best.pt or planner_epochX.pt")
-    parser.add_argument("--test_json", required=True, help="test input list json")
-    parser.add_argument("--image_dir", default=".", help="root dir for image_path entries")
-    parser.add_argument("--output_dir", default="infer_outputs")
+    parser.add_argument("--config")
+    parser.add_argument("--checkpoint")
+    parser.add_argument("--test_json")
+    parser.add_argument("--image_dir")
+    parser.add_argument("--output_dir", default="infer_out")
     args = parser.parse_args()
-    infer_and_save(args.config, args.checkpoint, args.test_json, args.image_dir, args.output_dir)
+    run_infer(args.config, args.checkpoint, args.test_json, args.image_dir, args.output_dir)
