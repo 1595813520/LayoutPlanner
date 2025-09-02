@@ -8,6 +8,7 @@ import numpy as np
 from PIL import Image, ImageOps
 from transformers import CLIPImageProcessor, ViTImageProcessor
 from torchvision import transforms
+from src.utils import get_bucket_size, resize_and_center_crop
 from collections import defaultdict
 
 def image_transform(pil_image):
@@ -160,13 +161,73 @@ def pad_to_max_tensor_int(tensor: list, max_len: int, pad_val: int = -1):
         return arr[:max_len]
     pad = torch.full((max_len-n,), pad_val, dtype=arr.dtype)
     return torch.cat([arr, pad], dim=0)
+
+
+
+class BucketBatchSampler(Sampler):
+    def __init__(self, dataset, batch_size):
+        self.buckets = dataset.buckets
+        self.bucket_size_index = dataset.bucket_size_index
+        self.batch_size = batch_size
+        self.bucket_keys = list(self.buckets.keys())
+        self.bucket_batches = self.calculate_bucket_batches()
+
+        self.bucket_samplers = [RandomSampler(self.buckets[bucket_key]) for bucket_key in self.bucket_keys]
+        # self.bucket_samplers = [SequentialSampler(self.buckets[bucket_key]) for bucket_key in self.bucket_keys]
+        # self.bucket_sampler_iters = [iter(sampler) for sampler in self.bucket_samplers]
+
+    def calculate_bucket_batches(self):
+        bucket_batches = []
+        for bucket_key in self.bucket_keys:
+            batch_size = max(1, round(self.batch_size / (2 ** (self.bucket_size_index[bucket_key] * 2))))
+            bucket_length = len(self.buckets[bucket_key])
+            bucket_batches.append((bucket_length + batch_size - 1) // batch_size)
+
+        # print(f"rank {accelerator.local_process_index}, bucket_batches: {bucket_batches}")
+        return bucket_batches
+    
+    def get_pseudo_full_batch(self, batch):
+        return batch + [None] * (self.batch_size - len(batch))
+
+    def __iter__(self):
+        bucket_sampler_iters = [iter(sampler) for sampler in self.bucket_samplers]
+        
+        batch_bucket_indexes = []
+        for idx, num_batch in enumerate(self.bucket_batches):
+            batch_bucket_indexes += [idx] * num_batch
+
+        random.shuffle(batch_bucket_indexes)
+
+        for bucket_idx in batch_bucket_indexes:
+            bucket_key = self.bucket_keys[bucket_idx]
+            batch_size = max(1, round(self.batch_size / (2 ** (self.bucket_size_index[bucket_key] * 2))))
+            batch = []
+            while True:
+                try:
+                    idx = next(bucket_sampler_iters[bucket_idx])
+                    idx = [bucket_idx, idx]
+                    batch.append(idx)
+                    if len(batch) == batch_size:
+                        # Accelerate seems cannot handle batchsampler with varying batch_sizes in multigpu training.
+                        # Pad to the largest batch_size.
+                        # print(f"rank {accelerator.local_process_index} yield batch, bucket_key: {bucket_key} batch: {batch} batchsize: {batch_size}")
+                        yield self.get_pseudo_full_batch(batch)
+                        break
+                except StopIteration:
+                    # print(f"rank {accelerator.local_process_index} StopIteration, bucket_key: {bucket_key} batch: {batch}")
+                    if len(batch) > 0:
+                        yield self.get_pseudo_full_batch(batch)
+                    break
+
+    def __len__(self):
+        return sum(self.bucket_batches)
     
 class MangaLayoutDataset(Dataset):
     """
     每条样本=一页（page），frames为panel列表
     采集ip_images为page级(所有panel所有角色融合到一组)
     """
-    def __init__(self, ann_source, image_dir=None, tokenizer=None, tokenizer_2=None,
+    def __init__(self, ann_source, size_buckets, image_dir=None, tokenizer=None, tokenizer_2=None,
                  max_panels=16, max_num_ips=4, max_num_ip_sources=1,
                  min_ip_height=5, min_ip_width=5, ip_flip_rate=0.5):
         self.samples = []
@@ -202,9 +263,27 @@ class MangaLayoutDataset(Dataset):
         self.ip_flip_rate = ip_flip_rate
         self.clip_image_processor = CLIPImageProcessor()
         self.magi_image_processor = ViTImageProcessor()
+        # build buckets
+        self.size_buckets = size_buckets
+        self.buckets = {}
+        self.bucket_keys = []
+        self.bucket_size_index = {}  # ★ 新增
+        self.partition_data()
+
+    def partition_data(self):
+        self.buckets = defaultdict(list)
+        self.bucket_size_index = {}
+        for idx, ann in enumerate(self.samples):
+            w, h = ann["width"], ann["height"]
+            bh, bw, size_idx = get_bucket_size(h, w, self.size_buckets)
+            key = (bh, bw)
+            self.buckets[key].append(idx)
+            self.bucket_size_index[key] = size_idx  # ★ 必须有
+        self.bucket_keys = list(self.buckets.keys())
 
     def __len__(self):
-        return len(self.samples)
+        # ★ 返回所有桶的总样本量
+        return sum(len(v) for v in self.buckets.values())
 
     def _get_page_image(self, ann):
         if self.image_dir is None: return None
@@ -267,7 +346,25 @@ class MangaLayoutDataset(Dataset):
     
 
     def __getitem__(self, idx):
-        ann = self.samples[idx]
+        """ index_tuple = (bucket_idx, sample_in_bucket_idx) """
+        bucket_idx, local_idx = idx
+        bucket_key = self.bucket_keys[bucket_idx]
+        ann_idx = self.buckets[bucket_key][local_idx]
+        ann = self.samples[ann_idx]
+        page_path = os.path.join(self.image_dir, ann["image_path"])
+        page_img = Image.open(page_path).convert("RGB")
+        
+        # 原图
+        page_img = self._get_page_image(ann)
+
+        # ★ 按桶尺寸 resize
+        bh, bw = bucket_key
+        page_img_resized, crop_tl = resize_and_center_crop(page_img, (bh, bw))
+
+        # 归一化到模型需要的范围，并转成 tensor
+        page_tensor = self.clip_image_processor(images=page_img_resized, return_tensors="pt").pixel_values.squeeze(0)
+
+
         width = ann["width"]
         height = ann["height"]
         style_vec = torch.tensor([
@@ -300,6 +397,10 @@ class MangaLayoutDataset(Dataset):
             "frames": out_panels,
             # "text_input_ids": text_input_ids,
             # "text_input_ids_2": text_input_ids_2,
+                    # ★ 新增 page 图数据
+            "page_image": page_tensor,  # 按 bucket 尺寸 resize + tensor
+            "page_bucket_size": torch.tensor([bh, bw], dtype=torch.int32),
+            "page_crop_tl": torch.tensor(crop_tl, dtype=torch.int32),
             "ip_images": ip_images,   # (max_num_ips*max_num_ip_sources, 3, 224, 224)
             "magi_ip_images": magi_ip_images,
             "ip_exists": ip_exists,

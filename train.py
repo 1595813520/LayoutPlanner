@@ -10,7 +10,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from transformers import CLIPTokenizer, CLIPTextModel, CLIPVisionModelWithProjection, AutoModel, CLIPTextModelWithProjection
 from src.datasets import MangaLayoutDataset, collate_fn
-from src.utils import load_ckpt, mean_multiple_ip_embeds, load_planner_ckpt
+from src.utils import load_ckpt, mean_multiple_ip_embeds, load_planner_ckpt, encode_in_chunks, size_buckets
 from models.layout_planner.planner import LayoutPlanner
 from models.layout_planner.resampler import Resampler
 from src.losses import LayoutCompositeLoss
@@ -18,6 +18,7 @@ from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import set_seed
 from accelerate import DistributedDataParallelKwargs
+
 from torch.utils.tensorboard import SummaryWriter
 def apply_style_cfg_dropout(style_vectors, p, device):
     """
@@ -112,7 +113,6 @@ def main():
     dataset = MangaLayoutDataset(
         ann_source=config.data.annotation_path,
         image_dir=config.data.image_dir,
-        config=config,
         tokenizer=tokenizer,
         tokenizer_2=tokenizer_2,
         max_panels=config.dataset.max_panels,
@@ -120,11 +120,17 @@ def main():
         max_num_ip_sources=config.model.vision.num_ip_sources,
     )
     
+    # batch_sampler = BucketBatchSampler(
+    #     dataset=dataset,
+    #     batch_size=config.training.batch_size
+    # )
+    
     loader = DataLoader(
         dataset,
-        batch_size=config.dataset.batch_size,
+        # batch_sampler=batch_sampler, 
+        batch_size=config.training.batch_size,
         shuffle=config.dataset.shuffle,
-        num_workers=config.dataset.num_workers * accelerator.num_processes,
+        num_workers=config.training.num_workers * accelerator.num_processes,
         # collate_fn=lambda b: collate_fn(b, config, device=accelerator.device), # 修改 collate 直接放 GPU
         collate_fn=lambda b: collate_fn(b, config), 
         pin_memory=True,
@@ -157,7 +163,10 @@ def main():
     # loss & optimizer
     criterion = LayoutCompositeLoss(
         lambda_style=config.training.lambda_style,
-        lambda_geom=config.training.lambda_geom
+        lambda_geom=config.training.lambda_geom,
+        style_mu=config.training.style_mu, 
+        style_sigma=config.training.style_sigma,
+        rect_class_id=config.panel_shapes["panel_rect"].id   
     )
         
     weight_dtype = torch.float32
@@ -250,10 +259,13 @@ def main():
             with torch.no_grad():
                 # 展平成[batch*角色数*ip_source, 3, 224, 224]
                 ip_images_flat = batch["ip_images"].view(B * N_ips * N_src, *batch["ip_images"].shape[2:])
-                
-                # ——改用 last_hidden_state！——
-                outputs = image_encoder(ip_images_flat.to(accelerator.device), output_hidden_states=False, return_dict=True)
-                image_embeds_raw = outputs.last_hidden_state  # [16, 257, 1280]
+                image_embeds_raw = encode_in_chunks(image_encoder, ip_images_flat,
+                                    chunk_size=config.training.batch_size,
+                                    device=accelerator.device,
+                                    dtype=weight_dtype)
+                # # ——改用 last_hidden_state！——
+                # outputs = image_encoder(ip_images_flat.to(accelerator.device), output_hidden_states=False, return_dict=True)
+                # image_embeds_raw = outputs.last_hidden_state  # [16, 257, 1280]
                 
                 # reshape为 [B, N_ips, N_src, seq_len, D_img]
                 image_embeds_raw = image_embeds_raw.view(B, N_ips, N_src, image_embeds_raw.shape[1], image_embeds_raw.shape[2])
@@ -265,7 +277,12 @@ def main():
                 # 处理 MAGI 部分同理
                 if magi_image_encoder is not None:
                     magi_images_flat = batch["magi_ip_images"].view(B * N_ips * N_src, *batch["magi_ip_images"].shape[2:])
-                    magi_hidden = magi_image_encoder(magi_images_flat.to(accelerator.device, dtype=weight_dtype)).last_hidden_state
+                    magi_hidden = encode_in_chunks(magi_image_encoder, magi_images_flat,
+                                chunk_size=config.training.batch_size,
+                                device=accelerator.device,
+                                dtype=weight_dtype)
+                    # magi_hidden = magi_image_encoder(magi_images_flat.to(accelerator.device, dtype=weight_dtype)).last_hidden_state
+                    # magi 用 [CLS] 向量
                     magi_embeds = magi_hidden[:, 0]
                     magi_embeds = magi_embeds.view(B, N_ips, N_src, -1).transpose(1, 2)
                     magi_image_embeds = magi_embeds.contiguous().view(B * N_src, N_ips, -1).to(dtype=weight_dtype)

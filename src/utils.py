@@ -6,6 +6,17 @@ from safetensors import safe_open
 import torch
 import torch.nn.functional as F
 
+def encode_in_chunks(encoder, pixel_values, chunk_size, device, dtype, use_grad=False):
+    outs = []
+    for i in range(0, pixel_values.size(0), chunk_size):
+        chunk = pixel_values[i:i+chunk_size].to(device, dtype=dtype, non_blocking=True)
+        if not use_grad:
+            with torch.no_grad():
+                out = encoder(chunk, output_hidden_states=False, return_dict=True).last_hidden_state
+        else:
+            out = encoder(chunk, output_hidden_states=False, return_dict=True).last_hidden_state
+        outs.append(out)
+    return torch.cat(outs, dim=0)  # [total_imgs, seq_len, hidden_dim]
 
 def get_generator(seed, device):
     if seed is not None:
@@ -29,24 +40,24 @@ def load_ckpt(image_proj_model, ckpt_path):
     new_state = {k.replace("module.", ""): v for k, v in state_dict.items()}
     
     
-    # 新增：打印模型参数名和检查点参数名，对比是否匹配
-    print("=== 模型中的参数名 ===")
-    model_keys = set(image_proj_model.state_dict().keys())
-    for k in sorted(model_keys):
-        print(k)
+    # # 新增：打印模型参数名和检查点参数名，对比是否匹配
+    # print("=== 模型中的参数名 ===")
+    # model_keys = set(image_proj_model.state_dict().keys())
+    # for k in sorted(model_keys):
+    #     print(k)
     
-    print("\n=== 检查点中的参数名 ===")
-    ckpt_keys = set(new_state.keys())
-    for k in sorted(ckpt_keys):
-        print(k)
+    # print("\n=== 检查点中的参数名 ===")
+    # ckpt_keys = set(new_state.keys())
+    # for k in sorted(ckpt_keys):
+    #     print(k)
     
-    # 新增：检查缺失/多余的参数
-    missing_keys = model_keys - ckpt_keys
-    unexpected_keys = ckpt_keys - model_keys
-    if missing_keys:
-        print(f"\n❌ 模型缺失参数：{missing_keys}")
-    if unexpected_keys:
-        print(f"\n❌ 检查点多余参数：{unexpected_keys}")
+    # # 新增：检查缺失/多余的参数
+    # missing_keys = model_keys - ckpt_keys
+    # unexpected_keys = ckpt_keys - model_keys
+    # if missing_keys:
+    #     print(f"\n❌ 模型缺失参数：{missing_keys}")
+    # if unexpected_keys:
+    #     print(f"\n❌ 检查点多余参数：{unexpected_keys}")
         
     image_proj_model.load_state_dict(new_state, strict=True, assign=True)
     

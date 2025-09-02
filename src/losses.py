@@ -414,14 +414,16 @@ def layout_alignment_matrix(bbox, mask):
     return X
 
 class GeometricConstraintLoss(nn.Module):
-    def __init__(self, breakout_thresh=0.02, eps=1e-6, align_weight=0.1, overlap_weight=1.0):
+    def __init__(self, breakout_tol_min=0.01, breakout_tol_max=0.3, rect_class_id=0, eps=1e-6, align_weight=1.0, overlap_weight=1.0):
         super().__init__()
-        self.breakout_thresh = breakout_thresh
+        self.breakout_tol_min = breakout_tol_min
+        self.breakout_tol_max = breakout_tol_max
         self.eps = eps
         self.align_weight = align_weight
         self.overlap_weight = overlap_weight
+        self.rect_class_id = rect_class_id
 
-    def _containment_loss_batch(self, child_xyxy, parent_xyxy, breakout_ratio, valid_mask, tol=0.0):
+    def _containment_loss_batch(self, child_xyxy, parent_xyxy, valid_mask, tol=0.0):
         lt = torch.max(child_xyxy[..., :2], parent_xyxy[..., :2])
         rb = torch.min(child_xyxy[..., 2:], parent_xyxy[..., 2:])
         wh = (rb - lt).clamp(min=0)
@@ -430,10 +432,12 @@ class GeometricConstraintLoss(nn.Module):
         outside_area = (child_area - inter).clamp(min=0)
         # 平滑容忍机制
         loss_per_element = F.relu(outside_area / (child_area + self.eps) - tol)
-        mask = (breakout_ratio < self.breakout_thresh) & valid_mask
-        return loss_per_element[mask].mean() if mask.any() else torch.tensor(0.0, device=child_xyxy.device, requires_grad=True)
+        
+        mask = valid_mask  # 不固定 breakout_thresh，动态 tol 控制
+        return loss_per_element[mask].mean() if mask.any() else torch.tensor(
+            0.0, device=child_xyxy.device, requires_grad=True)
 
-    def forward(self, predictions, batch):
+    def forward(self, predictions, batch, style_target_breakout=None):
         device = batch['panel_mask'].device
         B = batch['panel_mask'].shape[0]
 
@@ -453,39 +457,85 @@ class GeometricConstraintLoss(nn.Module):
         _, align_loss = layout_alignment(panel_bboxes_xywh, mask=panel_mask, xy_only=False)
         align_loss = align_loss.mean()
 
-        # --- Containment ---
+        
+        # ========== 动态 tol ==========
+        if style_target_breakout is not None:
+            tol_value = self.breakout_tol_min + \
+                        (self.breakout_tol_max - self.breakout_tol_min) * style_target_breakout
+        else:
+            tol_value = torch.full((B,), self.breakout_tol_min, device=device)
+            
+        # Containment: Dialog
         dialog_mask = batch['dialog_mask']
-        dialog_parent_idx = batch['dialog_parent_idx'].clamp(0, panel_bboxes_xyxy.shape[1]-1)
-        dialog_parent_boxes = torch.gather(panel_bboxes_xyxy, 1, dialog_parent_idx.unsqueeze(-1).expand(-1, -1, 4))
+        dialog_parent_idx = batch['dialog_parent_idx'].clamp(0, panel_bboxes_xyxy.shape[1] - 1)
+        dialog_parent_boxes = torch.gather(panel_bboxes_xyxy, 1,
+                                           dialog_parent_idx.unsqueeze(-1).expand(-1, -1, 4))
         dialog_child_bbox = _cxywh_to_xyxy(predictions['dialog_bbox'])
         dialog_ratio = predictions['dialog_breakout_ratio'].squeeze(-1) \
-            if predictions['dialog_breakout_ratio'].dim() > 2 else predictions['dialog_breakout_ratio']
-        dialog_loss = self._containment_loss_batch(dialog_child_bbox, dialog_parent_boxes, dialog_ratio, dialog_mask, tol=0.02)
+            if predictions['dialog_breakout_ratio'].dim() > 2 \
+            else predictions['dialog_breakout_ratio']
+        dialog_loss_batch = []
+        for b in range(B):
+            dialog_loss_batch.append(
+                self._containment_loss_batch(dialog_child_bbox[b:b+1],
+                                             dialog_parent_boxes[b:b+1],
+                                             dialog_ratio[b:b+1],
+                                             dialog_mask[b:b+1],
+                                             tol=tol_value[b].item()))
+        dialog_loss = torch.stack(dialog_loss_batch).mean()
 
+        # Containment: Char
         char_mask = batch['character_mask']
-        char_parent_idx = batch['char_parent_idx'].clamp(0, panel_bboxes_xyxy.shape[1]-1)
-        char_parent_boxes = torch.gather(panel_bboxes_xyxy, 1, char_parent_idx.unsqueeze(-1).expand(-1, -1, 4))
+        char_parent_idx = batch['char_parent_idx'].clamp(0, panel_bboxes_xyxy.shape[1] - 1)
+        char_parent_boxes = torch.gather(panel_bboxes_xyxy, 1,
+                                         char_parent_idx.unsqueeze(-1).expand(-1, -1, 4))
         char_child_bbox = _cxywh_to_xyxy(predictions['character_bbox'])
         char_ratio = predictions['character_breakout_ratio'].squeeze(-1) \
-            if predictions['character_breakout_ratio'].dim() > 2 else predictions['character_breakout_ratio']
-        char_loss = self._containment_loss_batch(char_child_bbox, char_parent_boxes, char_ratio, char_mask, tol=0.02)
+            if predictions['character_breakout_ratio'].dim() > 2 \
+            else predictions['character_breakout_ratio']
+        char_loss_batch = []
+        for b in range(B):
+            char_loss_batch.append(
+                self._containment_loss_batch(char_child_bbox[b:b+1],
+                                             char_parent_boxes[b:b+1],
+                                             char_ratio[b:b+1],
+                                             char_mask[b:b+1],
+                                             tol=tol_value[b].item()))
+        char_loss = torch.stack(char_loss_batch).mean()
 
         containment_loss = dialog_loss + char_loss
-
+        
+        # 逻辑约束：矩形 offset=0
+        if 'panel_offsets' in predictions:
+            rect_mask = (batch['panel_classes'] == self.rect_class_id) & batch['panel_mask']
+            if rect_mask.any():
+                rect_offsets = predictions['panel_offsets'][rect_mask]
+                logic_rect_offset_loss = F.l1_loss(rect_offsets, torch.zeros_like(rect_offsets))
+            else:
+                logic_rect_offset_loss = torch.tensor(0.0, device=device)
+        else:
+            logic_rect_offset_loss = torch.tensor(0.0, device=device)
+            
         # --- 总几何loss ---
-        total_geom_loss = self.overlap_weight * overlap_loss + self.align_weight * align_loss + containment_loss
-
+        total_geom_loss = (
+            self.overlap_weight * overlap_loss +
+            self.align_weight * align_loss +
+            containment_loss + 
+            logic_rect_offset_loss
+        )
+        
         loss_dict = {
             "geom_overlap_loss": overlap_loss.item(),
             "geom_align_loss": align_loss.item(),
-            "geom_containment_loss": containment_loss.item()
+            "geom_containment_loss": containment_loss.item(),
+            "geom_logic_rect_offset_loss": logic_rect_offset_loss.item(),
         }
 
         return total_geom_loss, loss_dict
     
 
 class LayoutCompositeLoss(nn.Module):
-    def __init__(self, lambda_style=20.0, lambda_geom=20.0):
+    def __init__(self, lambda_style=20.0, lambda_geom=20.0, style_mu=None, style_sigma=None, rect_class_id=0):
         super().__init__()
         self.lambda_style = lambda_style
         self.lambda_geom = lambda_geom
@@ -493,6 +543,9 @@ class LayoutCompositeLoss(nn.Module):
         self.style_calc_fn = StyleCalculator()          # 已向量化
         self.geom_loss_fn = GeometricConstraintLoss()   # 新批处理版
         self.mse = nn.MSELoss(reduction='mean')
+        self.rect_class_id = rect_class_id
+        self.register_buffer('style_mu', torch.tensor(style_mu, dtype=torch.float32))
+        self.register_buffer('style_sigma', torch.tensor(style_sigma, dtype=torch.float32))
 
     def forward(self, predictions, batch):
         device = batch['panel_mask'].device
@@ -503,11 +556,21 @@ class LayoutCompositeLoss(nn.Module):
         # StyleLoss
         style_pred_values = self.style_calc_fn(predictions, batch)  # (B, 4)
         style_gt = batch["style_vector"].to(device)                 # (B, 4)
-        style_loss = self.mse(style_pred_values, style_gt)
+        
+        # ===== 标准化 =====
+        style_pred_norm = (style_pred_values - self.style_mu.to(device)) / self.style_sigma.to(device)
+        style_gt_norm = (style_gt - self.style_mu.to(device)) / self.style_sigma.to(device)
+        style_loss = self.mse(style_pred_norm, style_gt_norm)
+        # style_loss = self.mse(style_pred_values, style_gt)
 
         # Geometric Loss
-        geom_loss, geom_loss_dict = self.geom_loss_fn(predictions, batch)
+        # geom_loss, geom_loss_dict = self.geom_loss_fn(predictions, batch)
         
+        # geom_loss 接收 style_target_breakout（未标准化的第4列，用来计算 tol）
+        style_target_breakout = style_gt[:, 3]
+        geom_loss, geom_loss_dict = self.geom_loss_fn(predictions, batch,
+                                                      style_target_breakout=style_target_breakout, rect_class_id=self.rect_class_id)
+
         # pred_loss  = torch.nan_to_num(pred_loss, nan=0.0)
         # style_loss = torch.nan_to_num(style_loss, nan=0.0)
         # geom_loss  = torch.nan_to_num(geom_loss, nan=0.0)

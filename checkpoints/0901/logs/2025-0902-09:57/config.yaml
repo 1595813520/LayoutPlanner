@@ -1,0 +1,81 @@
+model:
+  type: .layout_encoder.TokenLayoutEncoder
+  image_proj_model: DiffSensei-main/checkpoints/diffsensei/image_generator/image_proj_model/pytorch_model.bin
+  pretrained_model_path: model/stable-diffusion-xl-base-1.0
+  image_encoder_path: IP-Adapter/models/image_encoder
+  magi_image_encoder_path: DiffSensei-main/checkpoints/magi
+  encoder:
+    d_model: 512
+    num_layers: 8
+    num_heads: 8
+    use_positional_encoding: true
+    use_final_ln: true
+    dropout: 0.05
+  vision:
+    num_ips: 9
+    num_ip_sources: 1
+    num_vision_tokens: 16
+    num_dummy_tokens: 16
+data:
+  annotation_path: DiffSensei-main/checkpoints/mangazero/annotations_mask_5.json
+  image_dir: DiffSensei-main/checkpoints/mangazero/images
+dataset:
+  max_elements: 90
+  max_panels: 30
+  max_dialogs: 30
+  max_characters: 30
+  num_workers: 8
+  batch_size: 32
+  shuffle: true
+training:
+  epochs: 100
+  lr: 0.0001
+  weight_decay: 0.01
+  clip_grad_norm: 1.0
+  grad_clip_interval: 10
+  log_interval: 10
+  lambda_style: 100.0
+  lambda_geom: 100.0
+  style_cfg_dropout: 0.05
+  save_interval: 1000
+  save_dir: /data/DiffSensei-main/layout-generator/checkpoints/0901
+  gradient_accumulation_steps: 1
+  mixed_precision: fp16
+  seed: 42
+  max_train_steps: 100000
+resampler:
+  dim: 1280
+  depth: 4
+  dim_head: 64
+  heads: 20
+  ff_mult: 4
+  cross_attention_dim: 2048
+layout_types:
+  TYPE_PAD: 0
+  TYPE_PAGE: 1
+  TYPE_PANEL: 2
+  TYPE_CHAR: 3
+  TYPE_DIALOG: 4
+panel_shapes:
+  panel_rect:
+    id: 0
+  panel_triangle:
+    id: 1
+  panel_trapezoid:
+    id: 2
+  panel_irregular_quad:
+    id: 3
+bubble_shapes:
+  bubble_oval:
+    id: 0
+  bubble_flower:
+    id: 1
+  bubble_burst:
+    id: 2
+  bubble_rect:
+    id: 3
+config: DiffSensei-main/layout-generator/configs/train.yaml
+save_dir: DiffSensei-main/layout-generator/checkpoints/0901
+max_train_steps: 100000
+batch_size: 32
+seed: 0

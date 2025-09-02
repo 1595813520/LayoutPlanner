@@ -29,11 +29,11 @@ dataset:
   max_panels: 30
   max_dialogs: 30
   max_characters: 30
-  num_workers: 8
-  batch_size: 64
   shuffle: true
 
 training:
+  num_workers: 4
+  batch_size: 32
   epochs: 100
   lr: 1e-4
   weight_decay: 0.01
@@ -42,6 +42,8 @@ training:
   log_interval: 10        # 每多少 step 记录一次到 TB
   lambda_style: 100.0
   lambda_geom: 100.0
+  style_mu: [0.9602522, 0.51703715, 0.45116463, 0.02762985]   # 预先计算了style params的均值和标准差用于归一化
+  style_sigma: [0.14532684, 0.0966792,  0.13077953, 0.02751569]
   style_cfg_dropout: 0.05
   save_interval: 1000
   save_dir: "/data/DiffSensei-main/layout-generator/checkpoints/0901"
