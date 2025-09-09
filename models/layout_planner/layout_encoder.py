@@ -93,12 +93,14 @@ class TokenLayoutEncoder(nn.Module):
       - seq_feats (B,S,d_model)     给 heads 用
       - key_padding_mask (B,S)      供可选的 attention mask
     """
-    def __init__(self, max_elements: int, max_characters: int, d_model: int, num_layers: int, num_heads: int, 
+    def __init__(self, max_elements: int, max_characters: int, max_panels: int, max_dialogs: int, d_model: int, num_layers: int, num_heads: int, 
                  layout_types, caption_embed_dim: int = 768, visual_embed_dim: int = 2048,
                  use_positional_encoding: bool = True, use_final_ln: bool = True, dropout: float = 0.05):
         super().__init__()
         self.max_elements = max_elements
         self.max_characters = max_characters
+        self.max_panels = max_panels
+        self.max_dialogs = max_dialogs
         self.d_model = d_model
         self.use_positional_encoding = use_positional_encoding
         self.use_final_ln = use_final_ln
@@ -237,7 +239,7 @@ class TokenLayoutEncoder(nn.Module):
             for b in range(B):
                 dialog_pos = torch.nonzero(is_dialog[b], as_tuple=False).squeeze(1)
                 for seq_idx in dialog_pos:
-                    sid = dialog_speaker_ids[b, seq_idx].item()  # 页内角色索引
+                    sid = dialog_speaker_ids[b, seq_idx].item()  # 页内角色索引,批内局部的 character 索引
                     if sid >= 0 and sid < visual_e.shape[1]:
                         dialog_injection[b, seq_idx] = visual_e[b, sid]
 

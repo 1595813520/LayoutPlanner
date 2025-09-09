@@ -38,6 +38,7 @@ class PredictionLoss(nn.Module):
         if pred is None or target is None or mask is None:
             # return torch.tensor(0.0, device=pred.device if pred is not None else torch.device("cuda"), requires_grad=True)
             return (pred*0).sum() if pred is not None else torch.tensor(0.0, device=mask.device)
+            # return (pred*0).sum() if pred is not None else sum([(p.sum()*0) for p in self.parameters()])
         
         if not mask.any():
             # return torch.tensor(0.0, device=pred.device, requires_grad=True)  # 保证梯度链不断
@@ -392,7 +393,7 @@ def layout_alignment(bbox, mask, xy_only=False, mode='all'):
 
     X = X.min(-1).values.min(-1).values
     X.masked_fill_(X.eq(1.0), 0.0)
-    X = -torch.log(1 - X)
+    X = -torch.log((1 - X).clamp(min=1e-6))  # clamp 防止 log(0)
 
     score = einops.reduce(X, "b s -> b", reduction="sum")
     score_normalized = score / einops.reduce(mask, "b s -> b", reduction="sum")
@@ -414,7 +415,7 @@ def layout_alignment_matrix(bbox, mask):
     return X
 
 class GeometricConstraintLoss(nn.Module):
-    def __init__(self, breakout_tol_min=0.01, breakout_tol_max=0.3, rect_class_id=0, eps=1e-6, align_weight=1.0, overlap_weight=1.0):
+    def __init__(self, breakout_tol_min=0.01, breakout_tol_max=0.4, rect_class_id=0, eps=1e-6, align_weight=1.0, overlap_weight=1.0):
         super().__init__()
         self.breakout_tol_min = breakout_tol_min
         self.breakout_tol_max = breakout_tol_max
@@ -433,9 +434,13 @@ class GeometricConstraintLoss(nn.Module):
         # 平滑容忍机制
         loss_per_element = F.relu(outside_area / (child_area + self.eps) - tol)
         
-        mask = valid_mask  # 不固定 breakout_thresh，动态 tol 控制
-        return loss_per_element[mask].mean() if mask.any() else torch.tensor(
-            0.0, device=child_xyxy.device, requires_grad=True)
+        # 不固定 breakout_thresh，动态 tol 控制
+        return loss_per_element[valid_mask].mean() if valid_mask.any() else (child_xyxy.sum() * 0.0)
+        
+        # if child_area.min() < 1e-6:
+        #     return torch.tensor(0.0, device=child_xyxy.device, requires_grad=True)
+        # ratio_term = outside_area / ((child_area + self.eps).clamp(min=1e-6))
+        # loss_per_element = F.relu(ratio_term - tol).clamp(max=10.0)  # 限制最大值，防止爆梯度
 
     def forward(self, predictions, batch, style_target_breakout=None):
         device = batch['panel_mask'].device
@@ -479,7 +484,7 @@ class GeometricConstraintLoss(nn.Module):
             dialog_loss_batch.append(
                 self._containment_loss_batch(dialog_child_bbox[b:b+1],
                                              dialog_parent_boxes[b:b+1],
-                                             dialog_ratio[b:b+1],
+                                             # dialog_ratio[b:b+1],
                                              dialog_mask[b:b+1],
                                              tol=tol_value[b].item()))
         dialog_loss = torch.stack(dialog_loss_batch).mean()
@@ -498,7 +503,7 @@ class GeometricConstraintLoss(nn.Module):
             char_loss_batch.append(
                 self._containment_loss_batch(char_child_bbox[b:b+1],
                                              char_parent_boxes[b:b+1],
-                                             char_ratio[b:b+1],
+                                             # char_ratio[b:b+1],
                                              char_mask[b:b+1],
                                              tol=tol_value[b].item()))
         char_loss = torch.stack(char_loss_batch).mean()
@@ -512,9 +517,16 @@ class GeometricConstraintLoss(nn.Module):
                 rect_offsets = predictions['panel_offsets'][rect_mask]
                 logic_rect_offset_loss = F.l1_loss(rect_offsets, torch.zeros_like(rect_offsets))
             else:
-                logic_rect_offset_loss = torch.tensor(0.0, device=device)
+                # 用模型预测生成一个零值以保持梯度链
+                logic_rect_offset_loss = predictions['panel_offsets'].sum() * 0.0
         else:
-            logic_rect_offset_loss = torch.tensor(0.0, device=device)
+            # 如果没有 panel_offsets 预测，同样挂在一个已存在的预测输出上防断链
+            if 'panel_bbox' in predictions:
+                logic_rect_offset_loss = predictions['panel_bbox'].sum() * 0.0
+            else:
+                # 兜底：本模块有任意一个输出就用它占位
+                any_pred = next(iter(predictions.values()))
+                logic_rect_offset_loss = any_pred.sum() * 0.0
             
         # --- 总几何loss ---
         total_geom_loss = (
@@ -541,7 +553,7 @@ class LayoutCompositeLoss(nn.Module):
         self.lambda_geom = lambda_geom
         self.pred_loss_fn = PredictionLoss()            # 已经批处理
         self.style_calc_fn = StyleCalculator()          # 已向量化
-        self.geom_loss_fn = GeometricConstraintLoss()   # 新批处理版
+        self.geom_loss_fn = GeometricConstraintLoss(rect_class_id=rect_class_id)
         self.mse = nn.MSELoss(reduction='mean')
         self.rect_class_id = rect_class_id
         self.register_buffer('style_mu', torch.tensor(style_mu, dtype=torch.float32))
@@ -569,11 +581,11 @@ class LayoutCompositeLoss(nn.Module):
         # geom_loss 接收 style_target_breakout（未标准化的第4列，用来计算 tol）
         style_target_breakout = style_gt[:, 3]
         geom_loss, geom_loss_dict = self.geom_loss_fn(predictions, batch,
-                                                      style_target_breakout=style_target_breakout, rect_class_id=self.rect_class_id)
+                                                      style_target_breakout=style_target_breakout)
 
-        # pred_loss  = torch.nan_to_num(pred_loss, nan=0.0)
-        # style_loss = torch.nan_to_num(style_loss, nan=0.0)
-        # geom_loss  = torch.nan_to_num(geom_loss, nan=0.0)
+        pred_loss  = torch.nan_to_num(pred_loss, nan=0.0)
+        style_loss = torch.nan_to_num(style_loss, nan=0.0)
+        geom_loss  = torch.nan_to_num(geom_loss, nan=0.0)
 
         total_loss = pred_loss + self.lambda_style * style_loss + self.lambda_geom * geom_loss
         loss_dict = {

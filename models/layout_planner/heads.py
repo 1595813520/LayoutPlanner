@@ -114,7 +114,7 @@ class DialogShapeHead(nn.Module):
     
 class ParallelPredictionHeads(nn.Module):
     def __init__(self, d_model=512, num_panel_classes=4, num_dialog_shapes=4,
-                 layout_types=None, max_panels=30, max_dialogs=30, max_chars=30):
+                 layout_types=None, max_panels=19, max_dialogs=33, max_chars=28):
         super().__init__()
         # Panel Prediction Heads
         self.panel_class_head = PanelClassHead(d_model, num_panel_classes)
@@ -273,9 +273,15 @@ class ParallelPredictionHeads(nn.Module):
         # 创建一个默认的零特征张量
         parent_features = torch.zeros(child_mask.sum(), panel_features.shape[1], device=device)
         
-        # 仅对找到了父Panel的子元素，用 gather 提取特征
-        valid_child_mask = (parent_indices_child >= 0)
-        if valid_child_mask.any():
-            parent_features[valid_child_mask] = panel_features[found_indices]
+        # 找出 match_matrix 的 (child_idx, panel_idx) 对
+        child_ids, panel_ids = torch.nonzero(match_matrix, as_tuple=True)
+
+        if child_ids.numel() > 0:
+            parent_features[child_ids] = panel_features[panel_ids]
+            
+        # # 仅对找到了父Panel的子元素，用 gather 提取特征
+        # valid_child_mask = (parent_indices_child >= 0)
+        # if valid_child_mask.any():
+        #     parent_features[valid_child_mask] = panel_features[found_indices]
             
         return parent_features

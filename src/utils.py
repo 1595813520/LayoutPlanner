@@ -72,13 +72,13 @@ def load_ckpt(image_proj_model, ckpt_path):
 
     # image_proj_model.load_state_dict(image_proj_ckpt, strict=True)
     
-def load_planner_ckpt(model, optimizer, ckpt_path, map_location="cpu"):
+def load_planner_ckpt(model, optimizer, ckpt_path, map_location="cpu", accelerator=None):
     """
     加载 planner 模型和 optimizer，同时恢复 global_step。
     返回 global_step。
     """
-    checkpoint = torch.load(ckpt_path, map_location=map_location, weights_only=True)
-    
+    # checkpoint = torch.load(ckpt_path, map_location=map_location, weights_only=True)
+    checkpoint = torch.load(ckpt_path, map_location=map_location)
     state_dict = checkpoint.get('model', checkpoint)
     # new_state = {k.replace("module.", ""): v for k, v in state_dict.items()}
     new_state = {f"module.{k}": v for k, v in state_dict.items()}
@@ -88,6 +88,14 @@ def load_planner_ckpt(model, optimizer, ckpt_path, map_location="cpu"):
     if optimizer is not None and 'optimizer' in checkpoint:
         optimizer.load_state_dict(checkpoint['optimizer'])
         print("[Load] optimizer state restored.")
+        
+        # GradScaler warmup
+        if accelerator is not None and accelerator.scaler is not None:
+            optimizer.zero_grad(set_to_none=True)
+            dummy_loss = torch.tensor(0.0, device=accelerator.device, requires_grad=True)
+            accelerator.backward(dummy_loss)
+            optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
 
     global_step = checkpoint.get('global_step', 0)
     print(f"[Load] resume from global_step = {global_step}")

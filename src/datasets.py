@@ -2,21 +2,13 @@ import torch
 from typing import Dict, Any, List
 import os
 import json
-from torch.utils.data import Dataset, Sampler, RandomSampler
+from torch.utils.data import Dataset
 import random
 import numpy as np
 from PIL import Image, ImageOps
 from transformers import CLIPImageProcessor, ViTImageProcessor
 from torchvision import transforms
 from collections import defaultdict
-
-def image_transform(pil_image):
-    # 将PIL Image转换为Tensor，并归一化到[-1,1]
-    fn = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize([0.5], [0.5]),
-    ])
-    return fn(pil_image)
 
 def _norm_xyxy(b, W, H):
     # 归一化到[0,1]
@@ -166,12 +158,11 @@ class MangaLayoutDataset(Dataset):
     每条样本=一页（page），frames为panel列表
     采集ip_images为page级(所有panel所有角色融合到一组)
     """
-    def __init__(self, ann_source, image_dir=None, tokenizer=None, tokenizer_2=None,
-                 max_panels=16, max_num_ips=4, max_num_ip_sources=1,
+    def __init__(self, ann_source, image_dir=None, tokenizer=None, 
+                 max_panels=19, max_dialogs=33, max_characters=28, max_num_ips=4, max_num_ip_sources=1,
                  min_ip_height=5, min_ip_width=5, ip_flip_rate=0.5):
         self.samples = []
         self.tokenizer = tokenizer
-        self.tokenizer_2 = tokenizer_2
         if os.path.isdir(ann_source):
             files = [os.path.join(ann_source, f) for f in os.listdir(ann_source) if f.endswith(".json")]
             files.sort()
@@ -195,6 +186,8 @@ class MangaLayoutDataset(Dataset):
         # 图像处理器，CLIP规范
         self.image_dir = image_dir
         self.max_panels = max_panels
+        self.max_dialogs = max_dialogs
+        self.max_characters = max_characters
         self.max_num_ips = max_num_ips
         self.max_num_ip_sources = max_num_ip_sources
         self.min_ip_height = min_ip_height
@@ -215,6 +208,60 @@ class MangaLayoutDataset(Dataset):
             page_img = Image.new("RGB", (224,224), (0,0,0))
         return page_img
 
+    def _truncate_annotation(self, ann):
+        frames = ann.get("frames", [])
+
+        # Step1: 面板裁剪
+        if len(frames) > self.max_panels:
+            frames = frames[:self.max_panels]
+
+        for f in frames:
+            dialogs = f.get("dialogs", [])
+            characters = f.get("characters", [])
+
+            # 保留被引用角色优先
+            referenced_ids = {
+                d.get("speaker_id") for d in dialogs
+                if isinstance(d.get("speaker_id"), int) and d.get("speaker_id") >= 0
+            }
+
+            sorted_chars = sorted(
+                characters,
+                key=lambda c: (c.get("id") not in referenced_ids,)
+            )
+            if len(sorted_chars) > self.max_characters:
+                sorted_chars = sorted_chars[:self.max_characters]
+            f["characters"] = sorted_chars
+            current_char_ids = {c.get("id") for c in sorted_chars}
+
+            # Dialog 截断
+            if len(dialogs) > self.max_dialogs:
+                dialogs = dialogs[:self.max_dialogs]
+
+            # 修 speaker_id，让它只能引用当前保留的角色
+            for d in dialogs:
+                sid = d.get("speaker_id", -1)
+                if sid not in current_char_ids:
+                    d["speaker_id"] = -1
+
+            f["dialogs"] = dialogs
+
+        # # 在裁 panel 之后，清理掉引用不存在 panel 的frames/dialogs/characters
+        # valid_panel_ids = set(range(len(frames)))
+        # clean_frames = []
+        # for pi, f in enumerate(frames):
+        #     # 跳过无效panel
+        #     if pi not in valid_panel_ids:
+        #         continue
+        #     # 清理characters/dialogs里错误的panel_idx
+        #     f["characters"] = [c for c in f.get("characters", [])]
+        #     f["dialogs"] = [d for d in f.get("dialogs", [])]
+        #     clean_frames.append(f)
+        # frames = clean_frames
+
+        ann["frames"] = frames
+        return ann
+    
     def _sample_ip_images_page(self, ann):
         """
         page级采集所有panel的所有角色，融合一组，每角色最多max_num_ip_sources张
@@ -268,6 +315,8 @@ class MangaLayoutDataset(Dataset):
 
     def __getitem__(self, idx):
         ann = self.samples[idx]
+        # 安全截断（保证结构和引用一致）
+        ann = self._truncate_annotation(ann)
         width = ann["width"]
         height = ann["height"]
         style_vec = torch.tensor([
@@ -360,27 +409,24 @@ def collate_fn(batch: List[Dict[str, Any]], config: Dict[str, Any]) -> Dict[str,
         ip_exists.append(ann["ip_exists"])
         ip_char_ids.append(ann["ip_char_ids"])
         
-        # # 新增ip_char_ids: 保证长度为 num_ips*num_ip_sources（需和上面pad一致，否则np.pad左对齐/追加-1或0至指定shape）
-        # id_arr = ann["ip_char_ids"]
-        # # 保证长度一致pad
-        # if len(id_arr) < config.model.vision.num_ips * config.model.vision.num_ip_sources:
-        #     padded = torch.cat([
-        #         id_arr,
-        #         torch.full((config.model.vision.num_ips * config.model.vision.num_ip_sources - len(id_arr),), 0, dtype=torch.long)
-        #     ])
-        #     ip_char_ids.append(padded)
-        # else:
-        #     ip_char_ids.append(id_arr[:config.model.vision.num_ips * config.model.vision.num_ip_sources])
+        # 页内重编号: 将所有 panel 中出现的角色统一编号 0..N-1
+        page_characters = []    # 按 Panel 顺序把所有角色依次放进一个 page_characters 列表
+        for frame in frames:
+            page_characters.extend(frame.get("characters", []))
+        # (panel_idx, panel_local_idx) → 页内全局 id, panel X 里的 local_char_idx 在全局映射下会 += sum(前面所有panel的人数)
+        # dialog_speaker_ids：从 (d["panel_idx"], int(speaker_id)) 查 local_id_map 得到的页内全局 id
+        # character_ids：从 (c["panel_idx"], c["local_idx"]) 查 local_id_map 得到的页内全局 id
+        local_id_map = {}
+        for new_id, ch in enumerate(page_characters):
+            old_id = int(ch.get("id", -1))
+            local_id_map[(old_id, id(ch))] = new_id  # 注意用对象id区分同panel中相同旧id的不同实例
             
-        # token序列展平（同前，只panel属性/对话/角色展开）
-        # et, ei, parent_idx = [TYPE_PAGE],[0],[-1]
-        
         # === token 初始化 - Page token ===
         et, ei, parent_idx, elocal_idx = [TYPE_PAGE],[0],[-1], [-1] # 新增 elocal_idx
-
         panels, dialogs, chars = [], [], []
         pcaps, pbxs, poffs, pcls = [], [], [], []
-        
+        local_id_map = {}
+        char_global_id = 0
         
         for pi, p in enumerate(frames):
             # Panel token    
@@ -400,7 +446,13 @@ def collate_fn(batch: List[Dict[str, Any]], config: Dict[str, Any]) -> Dict[str,
             # 以 four_points 作为基准，计算 classification_points 相对于 four_points 的偏移量。偏移量已经提前计算，但也可以不提前计算
             # poff = p.get("offsets") if p.get("offsets") else _offsets_from_four_points(class_bbox, four, W, H)
             poff = p["offsets"] if "offsets" in p else [0.0] * 8
-            poff_norm = [off / float(max(W, H)) for off in poff]  # 归一化！！！！！！！！！！！！！！！
+            # poff_norm = [off / float(max(W, H)) for off in poff]  # 归一化！！！！！！！！！！！！！！！
+            poff_norm = []
+            for i, off in enumerate(poff):
+                if i % 2 == 0:  # dx
+                    poff_norm.append(off / float(W))
+                else:           # dy
+                    poff_norm.append(off / float(H))
             poffs.append(poff_norm)
             pcls.append(shape_map.get(p.get("shape_type", "panel_rect"), 0))
             pcaps.append(p.get("caption", ""))
@@ -414,15 +466,25 @@ def collate_fn(batch: List[Dict[str, Any]], config: Dict[str, Any]) -> Dict[str,
             for c in p.get("characters", []):
                 chars.append({"panel_idx": pi, "char": c, "local_idx": local_char_idx})
                 local_char_idx += 1
+                
+            for local_idx, ch in enumerate(p.get("characters", [])):
+                local_id_map[(pi, local_idx)] = char_global_id
+                char_global_id += 1
 
+        # 建panel_token_pos映射: 局部panel idx -> token绝对位置
+        panel_token_pos = { idx: pos for pos, (t, idx) in enumerate(zip(et, ei)) if t == TYPE_PANEL }
+        
         # dialog/char
         dbxs, dlabels, dratios, dshapes = [], [], [], []
         cbxs, clabels, cratios, char_ids = [], [], [], []
-        dialog_speakers = []
-        
+        dialog_speakers, dlg_speakers_local = [], []
+
         for j, d in enumerate(dialogs):
-            # et.append(TYPE_DIALOG); ei.append(j); parent_idx.append(d["panel_idx"])
-            et.append(TYPE_DIALOG); ei.append(j); parent_idx.append(d["panel_idx"]); elocal_idx.append(d["local_idx"])
+            # et.append(TYPE_DIALOG); ei.append(j); parent_idx.append(d["panel_idx"]); elocal_idx.append(d["local_idx"])
+            # 父panel token绝对index
+            # et.append(TYPE_DIALOG); ei.append(j); parent_idx.append(panel_token_pos[d["panel_idx"]]); elocal_idx.append(d["local_idx"])
+            et.append(TYPE_DIALOG); ei.append(j); parent_idx.append(panel_token_pos.get(d["panel_idx"], -1)); elocal_idx.append(d["local_idx"])
+
             dg = d["dialog"]
             xyxy = dg.get("rect_box") or [0, 0, 1, 1]
             x1,y1,x2,y2 = xyxy
@@ -436,22 +498,34 @@ def collate_fn(batch: List[Dict[str, Any]], config: Dict[str, Any]) -> Dict[str,
             dlabels.append(1 if br > 1e-6 else 0)
             dshapes.append(shape_map_dialog.get(dg.get("bubble_type", None), 0))
             # 取 speaker_id，如果缺失设为 -1
-            speaker_id = dg.get("speaker_id", None)
-            dialog_speakers.append(-1 if speaker_id is None else int(speaker_id))
+            speaker_id = dg.get("speaker_id", -1)
+            # dialog_speakers.append(-1 if speaker_id is None else int(speaker_id)) 
+            # if (speaker_id, id(page_characters[speaker_id])) in local_id_map:
+            #     spk_local = local_id_map[(speaker_id, id(page_characters[speaker_id]))]
+            # else:
+            #     spk_local = -1
+            # dialog_speakers.append(spk_local)
+            
+            speaker_local_idx = int(speaker_id)
+            spk_global = local_id_map.get((d["panel_idx"], speaker_local_idx), -1)
+            dialog_speakers.append(spk_global)
             
         for k, c in enumerate(chars):
-            # et.append(TYPE_CHAR); ei.append(k); parent_idx.append(c["panel_idx"])
-            et.append(TYPE_CHAR); ei.append(k); parent_idx.append(c["panel_idx"]); elocal_idx.append(c["local_idx"])
+            # et.append(TYPE_CHAR); ei.append(k); parent_idx.append(c["panel_idx"]); elocal_idx.append(c["local_idx"])
+            # et.append(TYPE_CHAR); ei.append(k); parent_idx.append(panel_token_pos[c["panel_idx"]]); elocal_idx.append(c["local_idx"])
+            et.append(TYPE_CHAR); ei.append(k); parent_idx.append(panel_token_pos.get(c["panel_idx"], -1)); elocal_idx.append(c["local_idx"])
             ch = c["char"]
             xyxy = ch.get("bbox") or [0,0,1,1]
-            char_id = int(ch.get("id", -1))
+            # char_id = int(ch.get("id", -1))
             x1,y1,x2,y2 = xyxy
             cx = (x1+x2)/2 / W
             cy = (y1+y2)/2 / H
             w  = (x2-x1) / W
             h  = (y2-y1) / H
             cbxs.append([cx,cy,w,h])
-            char_ids.append(char_id)
+            # char_ids.append(char_id)
+            # char_ids.append(local_id_map[(int(ch.get("id", -1)), id(c["char"]))])
+            char_ids.append(local_id_map[(c["panel_idx"], c["local_idx"])])
             br = float(ch.get("breakout_ratio", 0.0))
             cratios.append(br)
             clabels.append(1 if br > 1e-6 else 0)
@@ -499,6 +573,15 @@ def collate_fn(batch: List[Dict[str, Any]], config: Dict[str, Any]) -> Dict[str,
     token_panel_mask     = (element_types == TYPE_PANEL)
     token_dialog_mask    = (element_types == TYPE_DIALOG)
     token_character_mask = (element_types == TYPE_CHAR)
+    
+    
+    valid_parent_mask = (parent_panel_indices != -1)
+    token_dialog_mask = token_dialog_mask & valid_parent_mask
+    token_character_mask = token_character_mask & valid_parent_mask
+    
+    # token_dialog_mask = token_dialog_mask & (parent_panel_indices != -1)
+    # token_character_mask = token_character_mask & (parent_panel_indices != -1)
+    
     # 固定长度mask
     panel_mask = torch.stack([
         torch.arange(max_panels) < len(b.get("frames", []))
@@ -544,7 +627,6 @@ def collate_fn(batch: List[Dict[str, Any]], config: Dict[str, Any]) -> Dict[str,
         num_fill = min(len(dialog_positions), dialog_speaker_ids[b].shape[0])
         if num_fill > 0:
             dialog_speaker_ids_fullseq[b, dialog_positions[:num_fill]] = dialog_speaker_ids[b][:num_fill].long()
-    character_ids = character_ids_fullseq
     dialog_speaker_ids = dialog_speaker_ids_fullseq
     
     # 父索引

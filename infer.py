@@ -22,13 +22,12 @@ def cxywh_to_xyxy_pixels(cxywh, W, H):
     return clip_box([x1, y1, x2, y2], W, H)
 
 def offsets_to_four_points(base_xyxy, offsets, W, H):
-    scale = float(max(W, H))
     x1, y1, x2, y2 = base_xyxy
     bases = [[x1,y1],[x2,y1],[x2,y2],[x1,y2]]
     pts = []
     for i, (bx, by) in enumerate(bases):
-        dx = float(offsets[2*i]) * scale
-        dy = float(offsets[2*i+1]) * scale
+        dx = offsets[2*i]   * W
+        dy = offsets[2*i+1] * H
         pts.append([bx + dx, by + dy])
     return pts
 
@@ -59,7 +58,8 @@ def run_infer(cfg_path, ckpt_path, test_json, image_dir, output_dir):
 
     tokenizer, text_encoder, image_encoder, magi_image_encoder, resampler, planner = load_models(cfg, device)
     planner.load_state_dict(torch.load(ckpt_path, map_location=device)["model"])
-
+    planner.to(device)
+    resampler.to(device)  # 如果 resampler 是单独 module
     clip_proc = CLIPImageProcessor()
     magi_proc = ViTImageProcessor()
 

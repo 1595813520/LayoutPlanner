@@ -38,8 +38,10 @@ def main():
     parser.add_argument("--save_dir", type=str, default="./checkpoints")
     parser.add_argument("--max_train_steps", type=int, default=100000, help="")
     parser.add_argument("--batch_size", type=int, default=32, help="")
+    # "/data/DiffSensei-main/layout-generator/checkpoints/0906"
     parser.add_argument("--resume_log_dir", type=str, default=None, help="Log dir to resume training from (must contain config.yaml and checkpoints).")
     parser.add_argument("--seed", type=int, default=0, help="A seed for reproducible training.")
+    
     args = parser.parse_args()
     config = OmegaConf.load(args.config)
     args_dict = {k: v for k, v in vars(args).items() if v is not None}
@@ -48,6 +50,7 @@ def main():
     set_seed(config.training.seed)
     # ---- 自动选择 find_unused_parameters ----
     find_unused_params = False  # 默认关闭以提高性能
+    # find_unused_params = True
     ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=find_unused_params)
     accelerator = Accelerator(
         gradient_accumulation_steps=config.training.gradient_accumulation_steps,
@@ -57,8 +60,8 @@ def main():
 
     # ---- 日志设置 ----
     # 1. 确定 log_dir
-    if args.resume_log_dir is not None:
-        log_dir = args.resume_log_dir
+    if config.training.resume_log_dir is not None:
+        log_dir = config.training.resume_log_dir
     else:
         log_dir = os.path.join(config.training.save_dir, "logs", datetime.now().strftime("%Y-%m%d-%H:%M"))
 
@@ -71,15 +74,15 @@ def main():
         writer = None
 
     # 3. 同步所有进程，保证 log_dir 可用
-    accelerator.wait_for_everyone()
+    # accelerator.wait_for_everyone()
 
     # 加载文本编码器和分词器
     tokenizer = CLIPTokenizer.from_pretrained(config.model.pretrained_model_path, subfolder="tokenizer")
     text_encoder = CLIPTextModel.from_pretrained(config.model.pretrained_model_path, subfolder="text_encoder")
-    tokenizer_2 = CLIPTokenizer.from_pretrained(config.model.pretrained_model_path, subfolder="tokenizer_2")
-    text_encoder_2 = CLIPTextModelWithProjection.from_pretrained(config.model.pretrained_model_path, subfolder="text_encoder_2")
+    # tokenizer_2 = CLIPTokenizer.from_pretrained(config.model.pretrained_model_path, subfolder="tokenizer_2")
+    # text_encoder_2 = CLIPTextModelWithProjection.from_pretrained(config.model.pretrained_model_path, subfolder="text_encoder_2")
     text_encoder.requires_grad_(False)
-    text_encoder_2.requires_grad_(False)
+    # text_encoder_2.requires_grad_(False)
     
     image_encoder_path = config.model.image_encoder_path
     image_encoder = CLIPVisionModelWithProjection.from_pretrained(image_encoder_path)
@@ -114,8 +117,9 @@ def main():
         ann_source=config.data.annotation_path,
         image_dir=config.data.image_dir,
         tokenizer=tokenizer,
-        tokenizer_2=tokenizer_2,
         max_panels=config.dataset.max_panels,
+        max_dialogs=config.dataset.max_dialogs,
+        max_characters=config.dataset.max_characters,
         max_num_ips=config.model.vision.num_ips,
         max_num_ip_sources=config.model.vision.num_ip_sources,
     )
@@ -124,17 +128,22 @@ def main():
     #     dataset=dataset,
     #     batch_size=config.training.batch_size
     # )
-    
+    # 强制对齐每个 rank 的 batch 数，避免 batch mismatch 造成的 DDP idle
+    if accelerator.num_processes > 1:
+        sampler = torch.utils.data.DistributedSampler(dataset, shuffle=False)
+    else:
+        sampler = None
+        
     loader = DataLoader(
         dataset,
-        # batch_sampler=batch_sampler, 
+        sampler=sampler, 
         batch_size=config.training.batch_size,
         shuffle=config.dataset.shuffle,
-        num_workers=config.training.num_workers * accelerator.num_processes,
+        num_workers=config.training.num_workers,
         # collate_fn=lambda b: collate_fn(b, config, device=accelerator.device), # 修改 collate 直接放 GPU
         collate_fn=lambda b: collate_fn(b, config), 
-        pin_memory=True,
-        persistent_workers=True
+        # pin_memory=True,
+        # persistent_workers=True
     )
     
     # for i, batch in enumerate(loader):
@@ -145,6 +154,8 @@ def main():
         encoder_cfg={
             "max_elements": config.dataset.max_elements,
             "max_characters": config.dataset.max_characters,
+            "max_panels": config.dataset.max_panels,
+            "max_dialogs": config.dataset.max_dialogs,
             "d_model": config.model.encoder.d_model,
             "num_layers": config.model.encoder.num_layers,
             "num_heads": config.model.encoder.num_heads,
@@ -159,7 +170,8 @@ def main():
             "layout_types": config.layout_types
         }
     )
-    
+    planner.requires_grad_(True)  # 确保有可训练参数
+
     # loss & optimizer
     criterion = LayoutCompositeLoss(
         lambda_style=config.training.lambda_style,
@@ -168,28 +180,73 @@ def main():
         style_sigma=config.training.style_sigma,
         rect_class_id=config.panel_shapes["panel_rect"].id   
     )
+    
+    lr = float(config.training.lr)
+    weight_decay = float(config.training.weight_decay)
+    optimizer = torch.optim.AdamW(planner.parameters(), lr=lr, weight_decay=weight_decay)
         
+    
+    
+    if accelerator.is_main_process:
+        trainable_params = [n for n, p in planner.named_parameters() if p.requires_grad]
+        print(f"Trainable params: {len(trainable_params)}")
+        total_params = sum(p.numel() for p in planner.parameters() if p.requires_grad)
+        print("Total trainable elements:", total_params)
+
     weight_dtype = torch.float32
     if accelerator.mixed_precision == "fp16":
         weight_dtype = torch.float16
     elif accelerator.mixed_precision == "bf16":
         weight_dtype = torch.bfloat16
     text_encoder.to(accelerator.device, dtype=weight_dtype)
-    text_encoder_2.to(accelerator.device, dtype=weight_dtype)
+    # # text_encoder_2.to(accelerator.device, dtype=weight_dtype)
     image_encoder.to(accelerator.device, dtype=weight_dtype)
     image_proj_model.to(accelerator.device, dtype=weight_dtype)
     if magi_image_encoder is not None:
         magi_image_encoder.to(accelerator.device, dtype=weight_dtype)
-    
-    lr = float(config.training.lr)
-    weight_decay = float(config.training.weight_decay)
-    optimizer = torch.optim.AdamW(planner.parameters(), lr=lr, weight_decay=weight_decay)
-    
+        
+    criterion.to(accelerator.device)
+        
     # Prepare everything with accelerator    
-    planner, criterion, optimizer, loader = accelerator.prepare(
-        planner, criterion, optimizer, loader
+    planner, optimizer, loader = accelerator.prepare(
+        planner, optimizer, loader
     )
+
+    # planner, optimizer, loader, text_encoder, image_encoder, image_proj_model, magi_image_encoder = accelerator.prepare(
+    #     planner, optimizer, loader, text_encoder, image_encoder, image_proj_model, magi_image_encoder
+    # )
     
+    # if config.training.resume_log_dir is not None:
+    #     ckpt_files = [f for f in os.listdir(log_dir) if f.startswith("planner_step") and f.endswith(".pt")]
+    #     if not ckpt_files:
+    #         raise FileNotFoundError(f"No checkpoint found in {log_dir}")
+    #     last_ckpt_file = sorted(ckpt_files, key=lambda x: int(x.split("planner_step")[1].split(".")[0]))[-1]
+    #     ckpt_path = os.path.join(log_dir, last_ckpt_file)
+    #     global_step = load_planner_ckpt(planner, optimizer, ckpt_path, map_location=accelerator.device, accelerator=accelerator)
+    # else:
+    #     global_step = 0
+    
+    if config.training.resume_log_dir is not None:
+        ckpt_files = [f for f in os.listdir(log_dir) if f.startswith("planner_step") and f.endswith(".pt")]
+        if not ckpt_files:
+            raise FileNotFoundError(f"No checkpoint found in {log_dir}")
+        last_ckpt_file = sorted(ckpt_files, key=lambda x: int(x.split("planner_step")[1].split(".")[0]))[-1]
+        ckpt_path = os.path.join(log_dir, last_ckpt_file)
+
+        # ======== 这里直接写加载逻辑 ========
+        ckpt = torch.load(ckpt_path, map_location="cpu")
+        accelerator.unwrap_model(planner).load_state_dict(ckpt["model"])
+        if "optimizer" in ckpt:
+            optimizer.load_state_dict(ckpt["optimizer"])
+        if "scaler" in ckpt:
+            accelerator.scaler.load_state_dict(ckpt["scaler"])
+        global_step = ckpt.get("global_step", 0)
+        print(f"[Load] resume from global_step = {global_step}")
+        # ====================================
+    else:
+        global_step = 0
+    
+
     style_dropout_p = float(config.training.style_cfg_dropout)
     # epochs = int(config.training.epochs)
     save_dir = config.training.save_dir
@@ -200,20 +257,18 @@ def main():
     step_in_epoch = 0
     running = 0.0
     
-    if args.resume_log_dir is not None:
-        ckpt_files = [f for f in os.listdir(log_dir) if f.startswith("planner_step") and f.endswith(".pt")]
-        if not ckpt_files:
-            raise FileNotFoundError(f"No checkpoint found in {log_dir}")
-        last_ckpt_file = sorted(ckpt_files, key=lambda x: int(x.split("planner_step")[1].split(".")[0]))[-1]
-        ckpt_path = os.path.join(log_dir, last_ckpt_file)
-        global_step = load_planner_ckpt(planner, optimizer, ckpt_path, map_location=accelerator.device)
-    else:
-        global_step = 0
-    
+
+    print("Starting train, global_step =", global_step)
     while global_step < config.training.max_train_steps:
+        
+        # 确保多卡 sampler 每轮打乱一致
+        if hasattr(loader, "sampler") and hasattr(loader.sampler, "set_epoch"):
+            loader.sampler.set_epoch(global_step // len(loader))
+            
     # for epoch in range(1, epochs+1):
         planner.train()
         t0 = time.time()
+        
         for i, batch in enumerate(loader):
         # for batch in loader:
             # (可选) panel captions嵌入（批处理，padding已在collate_fn完成）
@@ -328,6 +383,22 @@ def main():
                     loss, logs = criterion(outputs, batch)
                 accelerator.backward(loss)
                 
+            #         # ===== 检查梯度 =====
+            #     grad_has_nan = False
+            #     for name, p in planner.named_parameters():
+            #         if p.grad is not None:
+            #             if not torch.isfinite(p.grad).all():
+            #                 grad_has_nan = True
+            #                 print(f"[Step {global_step}] 检测到梯度 NaN/Inf: {name}")
+            #     if grad_has_nan:
+            #         raise FloatingPointError(f"梯度 NaN/Inf at step {global_step}")
+
+            # # ===== 检查显存 =====
+            # max_alloc = torch.cuda.max_memory_allocated() / (1024**2)
+            # max_reserved = torch.cuda.max_memory_reserved() / (1024**2)
+            # if accelerator.is_main_process and (global_step % 100 == 0):
+            #     print(f"[Step {global_step}] 显存峰值 - Allocated: {max_alloc:.1f}MB, Reserved: {max_reserved:.1f}MB")
+                            
             synced_loss = accelerator.gather(loss).mean()
             running += synced_loss.item()
 
@@ -361,6 +432,7 @@ def main():
                 accelerator.save({
                     "model": accelerator.get_state_dict(planner),  # 兼容 DDP
                     "optimizer": optimizer.state_dict(),
+                    "scaler": accelerator.scaler.state_dict(),
                     "global_step": global_step
                 }, ckpt)
                 print(f"model saved to {ckpt}")

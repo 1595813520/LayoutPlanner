@@ -5,7 +5,7 @@ model:
   pretrained_model_path: "model/stable-diffusion-xl-base-1.0"
   image_encoder_path: "IP-Adapter/models/image_encoder"
   magi_image_encoder_path: "DiffSensei-main/checkpoints/magi"
-  planner_path: "/data/checkpoints/planner_step5000.pt"
+  planner_path: "/data/DiffSensei-main/layout-generator/checkpoints/0903_/planner_best.pt"
   encoder:
     d_model:  512              # 256
     num_layers: 8              # 6
@@ -14,24 +14,22 @@ model:
     use_final_ln: true
     dropout: 0.05
   vision:
-    num_ips: 6           # 角色最大数，采样用
+    num_ips: 10           # 角色最大数，采样用
     num_ip_sources: 1    # 每角色采样图片数
     num_vision_tokens: 16
     num_dummy_tokens: 16
     max_dialogs: 8
     
 data:
-  annotation_path: "/data/DiffSensei-main/layout-generator/checkpoints/f_annotations_style.json"
+  annotation_path: "/data/DiffSensei-main/layout-generator/checkpoints/test.json"
   image_dir: "DiffSensei-main/checkpoints/mangazero/images"
 
 dataset:
-  max_elements: 90
-  max_panels: 30
-  max_dialogs: 30
-  max_characters: 30
-  num_workers: 8
-  batch_size: 64
-  shuffle: true
+  max_elements: 80
+  max_panels: 19
+  max_dialogs: 33
+  max_characters: 28
+  shuffle: false
 
 resampler:
   dim: 1280

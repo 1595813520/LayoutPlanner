@@ -44,16 +44,27 @@ def load_models(cfg, device):
     ).to(device).eval()
     if cfg.model.image_proj_model:
         load_ckpt(resampler, cfg.model.image_proj_model)
-
     planner = LayoutPlanner(
-        encoder_cfg={**cfg.model.encoder,
-                     "layout_types": cfg.layout_types,
-                     "max_elements": cfg.dataset.max_elements,
-                     "max_characters": cfg.dataset.max_characters},
-        heads_cfg={"num_panel_classes": len(cfg.panel_shapes),
-                   "num_dialog_shapes": len(cfg.bubble_shapes)}
+        encoder_cfg={
+            "max_elements": cfg.dataset.max_elements,
+            "max_characters": cfg.dataset.max_characters,
+            "max_panels": cfg.dataset.max_panels,
+            "max_dialogs": cfg.dataset.max_dialogs,
+            "d_model": cfg.model.encoder.d_model,
+            "num_layers": cfg.model.encoder.num_layers,
+            "num_heads": cfg.model.encoder.num_heads,
+            "use_positional_encoding": cfg.model.encoder.use_positional_encoding,
+            "use_final_ln": cfg.model.encoder.use_final_ln,
+            "dropout": cfg.model.encoder.dropout,
+            "layout_types": cfg.layout_types
+        },
+        heads_cfg={
+            "num_panel_classes": len(cfg.panel_shapes),
+            "num_dialog_shapes": len(cfg.bubble_shapes),  # 不预测 bubble shape
+            "layout_types": cfg.layout_types
+        }
     ).to(device).eval()
-
+    
     return tokenizer, text_encoder, image_encoder, magi_image_encoder, resampler, planner
 
 def process_visual_features(characters, config, image_encoder, image_processor, magi_image_encoder, resampler, device):

@@ -15,8 +15,8 @@ model:
     use_final_ln: true
     dropout: 0.05
   vision:
-    num_ips: 9           # 角色最大数，采样用
-    num_ip_sources: 1    # 每角色采样图片数
+    num_ips: 10           # 角色最大数，采样用
+    num_ip_sources: 1     # 每角色采样图片数
     num_vision_tokens: 16
     num_dummy_tokens: 16
     
@@ -25,28 +25,29 @@ data:
   image_dir: "DiffSensei-main/checkpoints/mangazero/images"
 
 dataset:
-  max_elements: 90
-  max_panels: 30
-  max_dialogs: 30
-  max_characters: 30
-  shuffle: true
+  max_elements: 80
+  max_panels: 19
+  max_dialogs: 33
+  max_characters: 28
+  shuffle: false
 
 training:
   num_workers: 4
-  batch_size: 32
+  batch_size: 64
   epochs: 100
   lr: 1e-4
   weight_decay: 0.01
   clip_grad_norm: 1.0
   grad_clip_interval: 10  # 每多少 step 裁剪一次梯度
   log_interval: 10        # 每多少 step 记录一次到 TB
-  lambda_style: 100.0
-  lambda_geom: 100.0
+  lambda_style: 1.0
+  lambda_geom: 5.0        # 需要调参
   style_mu: [0.9602522, 0.51703715, 0.45116463, 0.02762985]   # 预先计算了style params的均值和标准差用于归一化
   style_sigma: [0.14532684, 0.0966792,  0.13077953, 0.02751569]
   style_cfg_dropout: 0.05
   save_interval: 1000
-  save_dir: "/data/DiffSensei-main/layout-generator/checkpoints/0901"
+  save_dir: "/data/DiffSensei-main/layout-generator/checkpoints/0906"
+  resume_log_dir: "/data/DiffSensei-main/layout-generator/checkpoints/0906"
   gradient_accumulation_steps: 1
   mixed_precision: "fp16"
   seed: 42

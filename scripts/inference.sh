@@ -1,9 +1,9 @@
-python DiffSensei-main/layout-generator/infer.py \
+CUDA_VISIBLE_DEVICES=7 python DiffSensei-main/layout-generator/infer.py \
     --config DiffSensei-main/layout-generator/configs/infer.yaml \
-    --checkpoint checkpoints/planner_step10000.pt \
-    --test_json DiffSensei-main/new/util/test.json \
+    --checkpoint /data/DiffSensei-main/layout-generator/checkpoints/0903_/planner_best.pt \
+    --test_json /data/DiffSensei-main/layout-generator/checkpoints/test.json \
     --image_dir DiffSensei-main/checkpoints/mangazero/images \
-    --output_dir DiffSensei-main/layout-generator/outputs/0901
+    --output_dir DiffSensei-main/layout-generator/outputs/0905
 
 
 python infer_new.py --config configs/infer.yaml \
