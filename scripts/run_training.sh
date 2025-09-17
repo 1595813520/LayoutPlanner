@@ -17,7 +17,7 @@ nohup accelerate launch DiffSensei-main/layout-generator/train.py \
        --save_dir DiffSensei-main/layout-generator/checkpoints/0907 \
        > DiffSensei-main/layout-generator/checkpoints/0907.log 2>&1 &
 
-CUDA_VISIBLE_DEVICES=0 nohup python DiffSensei-main/layout-generator/train.py \
+CUDA_VISIBLE_DEVICES=0 python DiffSensei-main/layout-generator/train.py \
        --config DiffSensei-main/layout-generator/configs/train.yaml \
        --save_dir DiffSensei-main/layout-generator/checkpoints/0903
         > DiffSensei-main/layout-generator/checkpoints/0903.log 2>&1 &

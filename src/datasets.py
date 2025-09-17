@@ -246,19 +246,6 @@ class MangaLayoutDataset(Dataset):
 
             f["dialogs"] = dialogs
 
-        # # 在裁 panel 之后，清理掉引用不存在 panel 的frames/dialogs/characters
-        # valid_panel_ids = set(range(len(frames)))
-        # clean_frames = []
-        # for pi, f in enumerate(frames):
-        #     # 跳过无效panel
-        #     if pi not in valid_panel_ids:
-        #         continue
-        #     # 清理characters/dialogs里错误的panel_idx
-        #     f["characters"] = [c for c in f.get("characters", [])]
-        #     f["dialogs"] = [d for d in f.get("dialogs", [])]
-        #     clean_frames.append(f)
-        # frames = clean_frames
-
         ann["frames"] = frames
         return ann
     
@@ -426,6 +413,9 @@ def collate_fn(batch: List[Dict[str, Any]], config: Dict[str, Any]) -> Dict[str,
         panels, dialogs, chars = [], [], []
         pcaps, pbxs, poffs, pcls = [], [], [], []
         local_id_map = {}
+        
+        # 建立全局flatten角色唯一编号（key=(panel_idx, str(id))，value=char_global_id）
+        global_char_id_map = {}
         char_global_id = 0
         
         for pi, p in enumerate(frames):
@@ -456,19 +446,11 @@ def collate_fn(batch: List[Dict[str, Any]], config: Dict[str, Any]) -> Dict[str,
             poffs.append(poff_norm)
             pcls.append(shape_map.get(p.get("shape_type", "panel_rect"), 0))
             pcaps.append(p.get("caption", ""))
-            
-            # 为每个Panel内的dialog和character维护一个局部计数器
-            local_dialog_idx = 0
-            for d in p.get("dialogs", []):
-                dialogs.append({"panel_idx": pi, "dialog": d, "local_idx": local_dialog_idx})
-                local_dialog_idx += 1
-            local_char_idx = 0
-            for c in p.get("characters", []):
-                chars.append({"panel_idx": pi, "char": c, "local_idx": local_char_idx})
-                local_char_idx += 1
-                
-            for local_idx, ch in enumerate(p.get("characters", [])):
-                local_id_map[(pi, local_idx)] = char_global_id
+
+            # 建立局部id到全局id的映射
+            for ch in p.get("characters", []):
+                cid = str(ch.get("id"))   # id可能是字符串，一律转str
+                global_char_id_map[(pi, cid)] = char_global_id
                 char_global_id += 1
 
         # 建panel_token_pos映射: 局部panel idx -> token绝对位置
@@ -497,17 +479,11 @@ def collate_fn(batch: List[Dict[str, Any]], config: Dict[str, Any]) -> Dict[str,
             dratios.append(br)
             dlabels.append(1 if br > 1e-6 else 0)
             dshapes.append(shape_map_dialog.get(dg.get("bubble_type", None), 0))
-            # 取 speaker_id，如果缺失设为 -1
-            speaker_id = dg.get("speaker_id", -1)
-            # dialog_speakers.append(-1 if speaker_id is None else int(speaker_id)) 
-            # if (speaker_id, id(page_characters[speaker_id])) in local_id_map:
-            #     spk_local = local_id_map[(speaker_id, id(page_characters[speaker_id]))]
-            # else:
-            #     spk_local = -1
-            # dialog_speakers.append(spk_local)
-            
-            speaker_local_idx = int(speaker_id)
-            spk_global = local_id_map.get((d["panel_idx"], speaker_local_idx), -1)
+
+            # 【改】正确remap speaker_id (panel_idx, str(speaker_id)) -> flatten global id
+            speaker_id = dg.get("speaker_id", "-1")      # 保证字符串
+
+            spk_global = global_char_id_map.get((d["panel_idx"], str(speaker_id)), -1)
             dialog_speakers.append(spk_global)
             
         for k, c in enumerate(chars):
@@ -516,16 +492,15 @@ def collate_fn(batch: List[Dict[str, Any]], config: Dict[str, Any]) -> Dict[str,
             et.append(TYPE_CHAR); ei.append(k); parent_idx.append(panel_token_pos.get(c["panel_idx"], -1)); elocal_idx.append(c["local_idx"])
             ch = c["char"]
             xyxy = ch.get("bbox") or [0,0,1,1]
-            # char_id = int(ch.get("id", -1))
             x1,y1,x2,y2 = xyxy
             cx = (x1+x2)/2 / W
             cy = (y1+y2)/2 / H
             w  = (x2-x1) / W
             h  = (y2-y1) / H
             cbxs.append([cx,cy,w,h])
-            # char_ids.append(char_id)
-            # char_ids.append(local_id_map[(int(ch.get("id", -1)), id(c["char"]))])
-            char_ids.append(local_id_map[(c["panel_idx"], c["local_idx"])])
+            # char_id = int(ch.get("id", -1))
+            char_id = str(ch.get("id"))
+            char_ids.append(global_char_id_map[(c["panel_idx"], char_id)])
             br = float(ch.get("breakout_ratio", 0.0))
             cratios.append(br)
             clabels.append(1 if br > 1e-6 else 0)

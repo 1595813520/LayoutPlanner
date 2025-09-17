@@ -272,6 +272,21 @@ def main():
         for i, batch in enumerate(loader):
         # for batch in loader:
             # (可选) panel captions嵌入（批处理，padding已在collate_fn完成）
+            
+            
+            
+            # Debug batch，首个训练样本
+            if i == 0:
+                print("==== Train batch debug ====")
+                print("element_types:", batch["element_types"][0, :80].tolist())
+                print("parent_panel_indices:", batch["parent_panel_indices"][0, :80].tolist())
+                print("character_ids:", batch["character_ids"][0, :80].tolist())
+                print("dialog_speaker_ids:", batch["dialog_speaker_ids"][0, :80].tolist())
+                print("token_panel_mask:", batch["token_panel_mask"][0, :80].tolist())
+                print("token_character_mask:", batch["token_character_mask"][0, :80].tolist())
+                print("token_dialog_mask:", batch["token_dialog_mask"][0, :80].tolist())
+                print("----")
+                
             captions_nested = batch["panel_captions"]
             flat_captions = [c for caps in captions_nested for c in caps]
             if flat_captions:
